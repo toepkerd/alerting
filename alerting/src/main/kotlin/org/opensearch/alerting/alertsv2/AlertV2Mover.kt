@@ -165,9 +165,11 @@ class AlertV2Mover(
             val monitorV2Obj = hit.sourceAsMap[MONITOR_V2_TYPE] as Map<String, Any>
             val pplMonitorObj = monitorV2Obj[PPL_SQL_MONITOR_TYPE] as Map<String, Any>
             val triggers = pplMonitorObj[TRIGGERS_FIELD] as List<Map<String, Any>>
-            triggers.forEach { trigger ->
+            for (trigger in triggers) {
                 val triggerId = trigger[ID_FIELD] as String
                 val expireDuration = (trigger[EXPIRE_FIELD] as Int).toLong()
+                logger.debug("triggerId: $triggerId")
+                logger.debug("triggerExpires: $expireDuration")
                 triggerToExpireDuration[triggerId] = expireDuration
             }
         }
@@ -206,9 +208,7 @@ class AlertV2Mover(
         // Explicitly specify that at least one should clause must match
         expiredAlertsBoolQuery.minimumShouldMatch(1)
 
-        // only alerts' monitor IDs should be fetched, the ID of the alert
-        // itself will be the document ID, which is part of the doc's metadata,
-        // not the doc's source, so it doesn't need to be fetched in the query
+        // search for the expired alerts
         val expiredAlertsSearchQuery = SearchSourceBuilder.searchSource()
             .query(expiredAlertsBoolQuery)
             .size(MAX_SEARCH_SIZE)
@@ -217,6 +217,8 @@ class AlertV2Mover(
             .source(expiredAlertsSearchQuery)
         val expiredAlertsResponse: SearchResponse = client.suspendUntil { search(expiredAlertsRequest, it) }
 
+        // parse the search results into full alert docs, as they will need to be
+        // indexed into alert history indices
         val expiredAlertV2s = mutableListOf<AlertV2>()
         expiredAlertsResponse.hits.forEach { hit ->
             expiredAlertV2s.add(
