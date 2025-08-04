@@ -293,5 +293,73 @@ class AlertingSettings {
             0,
             Setting.Property.NodeScope, Setting.Property.Dynamic
         )
+
+        val ALERT_V2_HISTORY_ENABLED = Setting.boolSetting(
+            "plugins.alerting_v2.alert_history_enabled",
+            true,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERT_V2_HISTORY_ROLLOVER_PERIOD = Setting.positiveTimeSetting(
+            "plugins.alerting_v2.alert_history_rollover_period",
+            TimeValue(12, TimeUnit.HOURS),
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERT_V2_HISTORY_INDEX_MAX_AGE = Setting.positiveTimeSetting(
+            "plugins.alerting_v2.alert_history_max_age",
+            TimeValue(30, TimeUnit.DAYS),
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERT_V2_HISTORY_MAX_DOCS = Setting.longSetting(
+            "plugins.alerting_v2.alert_history_max_docs",
+            1000L, 0L,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERT_V2_HISTORY_RETENTION_PERIOD = Setting.positiveTimeSetting(
+            "plugins.alerting_v2.alert_history_retention_period",
+            TimeValue(60, TimeUnit.DAYS),
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERTING_V2_MAX_MONITORS = Setting.intSetting(
+            "plugins.alerting_v2.monitor.max_monitors",
+            1000,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERTING_V2_MIN_SUPPRESSION_DURATION = Setting.positiveTimeSetting(
+            "plugins.alerting_v2.monitor.min_suppression_duration",
+            TimeValue(1, TimeUnit.MINUTES),
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERTING_V2_MAX_SUPPRESSION_DURATION = Setting.positiveTimeSetting(
+            "plugins.alerting_v2.monitor.max_suppression_duration",
+            TimeValue(5, TimeUnit.DAYS),
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERTING_V2_MAX_QUERY_LENGTH = Setting.longSetting(
+            "plugins.alerting_v2.monitor.max_query_length",
+            2000L,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERT_V2_NOTIF_QUERY_RESULTS_MAX_SIZE = Setting.longSetting(
+            "plugins.alerting_v2.notif_query_results_max_size",
+            3000L,
+            0L,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val ALERT_V2_PER_RESULT_TRIGGER_MAX_ALERTS = Setting.intSetting(
+            "plugins.alerting_v2.per_result_trigger_max_alerts",
+            10,
+            1,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
     }
 }
