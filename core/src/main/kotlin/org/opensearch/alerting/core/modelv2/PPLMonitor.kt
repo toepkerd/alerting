@@ -1,10 +1,11 @@
 package org.opensearch.alerting.core.modelv2
 
+import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NO_ID
+import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NO_VERSION
 import org.opensearch.alerting.core.util.nonOptionalTimeField
 import org.opensearch.common.unit.TimeValue
 import org.opensearch.commons.alerting.model.CronSchedule
-import org.opensearch.commons.alerting.model.IntervalSchedule
-import org.opensearch.commons.alerting.model.Monitor
+import org.opensearch.commons.alerting.model.Monitor.Companion.SCHEMA_VERSION_FIELD
 import org.opensearch.commons.alerting.model.Schedule
 import org.opensearch.commons.alerting.util.IndexUtils
 import org.opensearch.commons.alerting.util.instant
@@ -41,8 +42,8 @@ import java.time.Instant
  * @property query The PPL query string to be executed by this monitor.
  */
 data class PPLMonitor(
-    override val id: String = MonitorV2.NO_ID,
-    override val version: Long = MonitorV2.NO_VERSION,
+    override val id: String = NO_ID,
+    override val version: Long = NO_VERSION,
     override val name: String,
     override val enabled: Boolean,
     override val schedule: Schedule,
@@ -122,7 +123,7 @@ data class PPLMonitor(
         builder.nonOptionalTimeField(MonitorV2.LAST_UPDATE_TIME_FIELD, lastUpdateTime)
         builder.optionalTimeField(MonitorV2.ENABLED_TIME_FIELD, enabledTime)
         builder.field(MonitorV2.TRIGGERS_FIELD, triggers.toTypedArray())
-        builder.field(Monitor.SCHEMA_VERSION_FIELD, schemaVersion)
+        builder.field(SCHEMA_VERSION_FIELD, schemaVersion)
         builder.field(QUERY_LANGUAGE_FIELD, queryLanguage.value)
         builder.field(QUERY_FIELD, query)
 
@@ -250,7 +251,7 @@ data class PPLMonitor(
                             triggers.add(PPLTrigger.parseInner(xcp))
                         }
                     }
-                    Monitor.SCHEMA_VERSION_FIELD -> schemaVersion = xcp.intValue()
+                    SCHEMA_VERSION_FIELD -> schemaVersion = xcp.intValue()
                     QUERY_LANGUAGE_FIELD -> {
                         val input = xcp.text()
                         val enumMatchResult = QueryLanguage.enumFromString(input)
