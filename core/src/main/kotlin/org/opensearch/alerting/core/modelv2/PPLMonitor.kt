@@ -301,10 +301,6 @@ data class PPLMonitor(
             requireNotNull(query) { "Query is null" }
             requireNotNull(lastUpdateTime) { "Last update time is null" }
 
-            if (schedule is IntervalSchedule && lookBackWindow != null) {
-                throw IllegalArgumentException("Look back windows only supported for CRON schedules")
-            }
-
             if (queryLanguage == QueryLanguage.SQL) {
                 throw IllegalArgumentException("SQL queries are not supported. Please use a PPL query.")
             }
