@@ -14,6 +14,7 @@ import org.opensearch.action.admin.cluster.health.ClusterHealthAction
 import org.opensearch.action.admin.cluster.health.ClusterHealthRequest
 import org.opensearch.action.admin.cluster.health.ClusterHealthResponse
 import org.opensearch.action.admin.indices.create.CreateIndexResponse
+import org.opensearch.action.admin.indices.mapping.get.GetMappingsRequest
 import org.opensearch.action.get.GetRequest
 import org.opensearch.action.get.GetResponse
 import org.opensearch.action.index.IndexRequest
@@ -23,6 +24,7 @@ import org.opensearch.action.search.SearchResponse
 import org.opensearch.action.support.ActionFilters
 import org.opensearch.action.support.HandledTransportAction
 import org.opensearch.action.support.clustermanager.AcknowledgedResponse
+import org.opensearch.alerting.AlertingV2Utils.getIndicesFromPplQuery
 import org.opensearch.alerting.AlertingV2Utils.validateMonitorV2
 import org.opensearch.alerting.PPLMonitorRunner.appendCustomCondition
 import org.opensearch.alerting.PPLMonitorRunner.executePplQuery
@@ -40,6 +42,7 @@ import org.opensearch.alerting.settings.AlertingSettings
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_MONITORS
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_QUERY_LENGTH
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_SUPPRESSION_DURATION
+import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_TRIGGERS
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MIN_SUPPRESSION_DURATION
 import org.opensearch.alerting.settings.AlertingSettings.Companion.INDEX_TIMEOUT
 import org.opensearch.alerting.settings.AlertingSettings.Companion.REQUEST_TIMEOUT
@@ -90,6 +93,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
     SecureTransportAction {
 
     @Volatile private var maxMonitors = ALERTING_V2_MAX_MONITORS.get(settings)
+    @Volatile private var maxTriggers = ALERTING_V2_MAX_TRIGGERS.get(settings)
     @Volatile private var minSuppressDuration = ALERTING_V2_MIN_SUPPRESSION_DURATION.get(settings)
     @Volatile private var maxSuppressDuration = ALERTING_V2_MAX_SUPPRESSION_DURATION.get(settings)
     @Volatile private var maxQueryLength = ALERTING_V2_MAX_QUERY_LENGTH.get(settings)
@@ -99,6 +103,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
 
     init {
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_MONITORS) { maxMonitors = it }
+        clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_TRIGGERS) { maxTriggers = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MIN_SUPPRESSION_DURATION) { minSuppressDuration = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_SUPPRESSION_DURATION) { maxSuppressDuration = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_QUERY_LENGTH) { maxQueryLength = it }
@@ -118,7 +123,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
 
         // validate the MonitorV2 based on its type
         when (indexMonitorV2Request.monitorV2) {
-            is PPLMonitor -> validateUserPermissionsAndMonitorPplQuery(
+            is PPLMonitor -> validatePplMonitorUserPermissionsAndQuery(
                 indexMonitorV2Request,
                 user,
                 object : ActionListener<Unit> { // validationListener
@@ -157,7 +162,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
     }
 
     // validates the PPL Monitor query and user's permissions to the indices it queries by submitting it to SQL/PPL plugin
-    private fun validateUserPermissionsAndMonitorPplQuery(
+    private fun validatePplMonitorUserPermissionsAndQuery(
         indexMonitorV2Request: IndexMonitorV2Request,
         user: User?,
         validationListener: ActionListener<Unit>
@@ -168,11 +173,27 @@ class TransportIndexMonitorV2Action @Inject constructor(
                 withContext(singleThreadContext) {
                     it.restore()
 
-                    checkUser(user, validationListener, indexMonitorV2Request)
-                    log.info("done checking user")
-
                     val pplMonitor = indexMonitorV2Request.monitorV2 as PPLMonitor
 
+                    // run basic validations against the PPL Monitor
+                    val pplMonitorValid = validatePplMonitor(pplMonitor, validationListener)
+                    if (!pplMonitorValid) {
+                        return@withContext
+                    }
+
+                    // check the user for basic permissions
+                    val userHasPermissions = checkUser(user, indexMonitorV2Request, validationListener)
+                    if (!userHasPermissions) {
+                        return@withContext
+                    }
+
+                    // check that given timestamp field is valid
+                    val timestampFieldValid = checkPplQueryIndicesForTimestampField(pplMonitor, validationListener)
+                    if (!timestampFieldValid) {
+                        return@withContext
+                    }
+
+                    // TODO: put this in a function just like above
                     try {
                         val nodeClient = client as NodeClient
 
@@ -187,6 +208,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
                                 continue
                             }
 
+                            // TODO: move these functions to the AlertingV2Utils object
                             val evalResultVar = findEvalResultVar(pplTrigger.customCondition!!)
 
                             val queryWithCustomCondition = appendCustomCondition(pplMonitor.query, pplTrigger.customCondition!!)
@@ -227,14 +249,68 @@ class TransportIndexMonitorV2Action @Inject constructor(
         }
     }
 
+    private fun validatePplMonitor(pplMonitor: PPLMonitor, validationListener: ActionListener<Unit>): Boolean {
+        // ensure the PPL Monitor only has up to the max number of triggers
+        if (pplMonitor.triggers.size > maxTriggers) {
+            validationListener.onFailure(
+                AlertingException.wrap(
+                    IllegalArgumentException(
+                        "PPL Monitor exceeds the maximum allowed number of triggers"
+                    )
+                )
+            )
+            return false
+        }
+
+        // ensure the trigger suppress durations are valid
+        pplMonitor.triggers.forEach { trigger ->
+            trigger.suppressDuration?.let { suppressDuration ->
+                if (suppressDuration > maxSuppressDuration) {
+                    validationListener.onFailure(
+                        AlertingException.wrap(
+                            IllegalArgumentException(
+                                "Suppress duration must be at most $maxSuppressDuration but was $suppressDuration"
+                            )
+                        )
+                    )
+                    return false
+                }
+                if (suppressDuration < minSuppressDuration) {
+                    validationListener.onFailure(
+                        AlertingException.wrap(
+                            IllegalArgumentException(
+                                "Suppress duration must be at least $minSuppressDuration but was $suppressDuration"
+                            )
+                        )
+                    )
+                    return false
+                }
+            }
+        }
+
+        // ensure the query length doesn't exceed the limit
+        if (pplMonitor.query.length > maxQueryLength) {
+            validationListener.onFailure(
+                AlertingException.wrap(
+                    IllegalArgumentException(
+                        "PPL Query length must be at most $maxQueryLength but was ${pplMonitor.query.length}"
+                    )
+                )
+            )
+            return false
+        }
+
+        return true
+    }
+
     private fun checkUser(
         user: User?,
-        actionListener: ActionListener<Unit>,
         indexMonitorV2Request: IndexMonitorV2Request,
-    ) {
+        validationListener: ActionListener<Unit>
+    ): Boolean {
         /* check initial user permissions */
-        if (!validateUserBackendRoles(user, actionListener)) {
-            return
+        if (!validateUserBackendRoles(user, validationListener)) {
+            return false
         }
 
         if (
@@ -247,29 +323,89 @@ class TransportIndexMonitorV2Action @Inject constructor(
                     "User specified backend roles, ${indexMonitorV2Request.rbacRoles}, " +
                         "that they don't have access to. User backend roles: ${user.backendRoles}"
                 )
-                actionListener.onFailure(
+                validationListener.onFailure(
                     AlertingException.wrap(
                         OpenSearchStatusException(
                             "User specified backend roles that they don't have access to. Contact administrator", RestStatus.FORBIDDEN
                         )
                     )
                 )
-                return
+                return false
             } else if (indexMonitorV2Request.rbacRoles.isEmpty()) {
                 log.debug(
                     "Non-admin user are not allowed to specify an empty set of backend roles. " +
                         "Please don't pass in the parameter or pass in at least one backend role."
                 )
-                actionListener.onFailure(
+                validationListener.onFailure(
                     AlertingException.wrap(
                         OpenSearchStatusException(
                             "Non-admin user are not allowed to specify an empty set of backend roles.", RestStatus.FORBIDDEN
                         )
                     )
                 )
-                return
+                return false
             }
         }
+
+        return true
+    }
+
+    // if look back window is specified, all the indices that the PPL query searches
+    // must contain the timestamp field specified in the PPL Monitor, and they must
+    // all be of OpenSearch data type "date"
+    private suspend fun checkPplQueryIndicesForTimestampField(
+        pplMonitor: PPLMonitor,
+        validationListener: ActionListener<Unit>
+    ): Boolean {
+        if (pplMonitor.lookBackWindow == null) {
+            // if no look back window was specified, no need
+            // to check for timestamp field in PPL query indices
+            return true
+        }
+
+        val pplQuery = pplMonitor.query
+        val timestampField = pplMonitor.timestampField
+
+        val indices = getIndicesFromPplQuery(pplQuery)
+        val getMappingsRequest = GetMappingsRequest().indices(*indices.toTypedArray())
+        val getMappingsResponse = client.suspendUntil { admin().indices().getMappings(getMappingsRequest, it) }
+
+        val metadataMap = getMappingsResponse.mappings
+        try {
+            for (index in metadataMap.keys) {
+                val metadata = metadataMap[index]!!.sourceAsMap["properties"] as Map<String, Any>
+                if (!metadata.keys.contains(timestampField)) {
+                    validationListener.onFailure(
+                        AlertingException.wrap(
+                            IllegalArgumentException("Query index $index don't contain given timestamp field: $timestampField")
+                        )
+                    )
+                    return false
+                }
+                val typeInfo = metadata[timestampField] as Map<String, String>
+                val type = typeInfo["type"]
+                if (type != "date") {
+                    validationListener.onFailure(
+                        AlertingException.wrap(
+                            IllegalArgumentException(
+                                "Timestamp field: $timestampField is present in index $index but is of type $type instead of type date"
+                            )
+                        )
+                    )
+                    return false
+                }
+            }
+        } catch (e: Exception) {
+            log.error("failed to read query indices' fields when checking for timestamp field: $timestampField")
+            validationListener.onFailure(
+                AlertingException.wrap(
+                    IllegalArgumentException("failed to read query indices' fields when checking for timestamp field: $timestampField", e)
+                )
+            )
+            return false
+        }
+
+        return true
     }
 
     private fun checkScheduledJobIndex(
@@ -467,21 +603,12 @@ class TransportIndexMonitorV2Action @Inject constructor(
             return
         }
 
-        var newMonitorV2: MonitorV2
-        val currentMonitorV2: MonitorV2 // this is the same as existingMonitorV2, but will be cast to a specific MonitorV2 type
-
-        when (indexMonitorRequest.monitorV2) {
-            is PPLMonitor -> {
-                newMonitorV2 = indexMonitorRequest.monitorV2 as PPLMonitor
-                currentMonitorV2 = existingMonitorV2 as PPLMonitor
-            }
-            else -> throw IllegalStateException("received unsupported monitor type to index: ${indexMonitorRequest.monitorV2.javaClass}")
-        }
+        var newMonitorV2 = indexMonitorRequest.monitorV2
 
         // If both are enabled, use the current existing monitor enabled time, otherwise the next execution will be
         // incorrect.
-        if (newMonitorV2.enabled && currentMonitorV2.enabled) {
-            newMonitorV2 = newMonitorV2.copy(enabledTime = currentMonitorV2.enabledTime)
+        if (newMonitorV2.enabled && existingMonitorV2.enabled) {
+            newMonitorV2 = newMonitorV2.makeCopy(enabledTime = existingMonitorV2.enabledTime)
         }
 
         /**
@@ -501,26 +628,26 @@ class TransportIndexMonitorV2Action @Inject constructor(
         if (user != null) {
             if (indexMonitorRequest.rbacRoles != null) {
                 if (isAdmin(user)) {
-                    newMonitorV2 = newMonitorV2.copy(
+                    newMonitorV2 = newMonitorV2.makeCopy(
                         user = User(user.name, indexMonitorRequest.rbacRoles, user.roles, user.customAttNames)
                     )
                 } else {
                     // rolesToRemove: these are the backend roles to remove from the monitor
                     val rolesToRemove = user.backendRoles - indexMonitorRequest.rbacRoles
                     // remove the monitor's roles with rolesToRemove and add any roles passed into the request.rbacRoles
-                    val updatedRbac = currentMonitorV2.user?.backendRoles.orEmpty() - rolesToRemove + indexMonitorRequest.rbacRoles
-                    newMonitorV2 = newMonitorV2.copy(
+                    val updatedRbac = existingMonitorV2.user?.backendRoles.orEmpty() - rolesToRemove + indexMonitorRequest.rbacRoles
+                    newMonitorV2 = newMonitorV2.makeCopy(
                         user = User(user.name, updatedRbac, user.roles, user.customAttNames)
                     )
                 }
             } else {
                 newMonitorV2 = newMonitorV2
-                    .copy(user = User(user.name, currentMonitorV2.user!!.backendRoles, user.roles, user.customAttNames))
+                    .makeCopy(user = User(user.name, existingMonitorV2.user!!.backendRoles, user.roles, user.customAttNames))
             }
             log.info("Update monitor backend roles to: ${newMonitorV2.user?.backendRoles}")
         }
 
-        newMonitorV2 = newMonitorV2.copy(schemaVersion = IndexUtils.scheduledJobIndexSchemaVersion)
+        newMonitorV2 = newMonitorV2.makeCopy(schemaVersion = IndexUtils.scheduledJobIndexSchemaVersion)
         val indexRequest = IndexRequest(SCHEDULED_JOBS_INDEX)
             .setRefreshPolicy(indexMonitorRequest.refreshPolicy)
             .source(newMonitorV2.toXContentWithUser(jsonBuilder(), ToXContent.MapParams(mapOf("with_type" to "true"))))
@@ -531,7 +658,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
             .timeout(indexTimeout)
 
         log.info(
-            "Updating monitor, ${currentMonitorV2.id}, from: ${currentMonitorV2.toXContentWithUser(
+            "Updating monitor, ${existingMonitorV2.id}, from: ${existingMonitorV2.toXContentWithUser(
                 jsonBuilder(),
                 ToXContent.MapParams(mapOf("with_type" to "true"))
             )} \n to: ${newMonitorV2.toXContentWithUser(jsonBuilder(), ToXContent.MapParams(mapOf("with_type" to "true")))}"
@@ -591,14 +718,15 @@ class TransportIndexMonitorV2Action @Inject constructor(
         actionListener: ActionListener<IndexMonitorV2Response>,
         user: User?
     ) {
-        var monitorV2 = when (indexMonitorRequest.monitorV2) {
-            is PPLMonitor -> {
-                val pplMonitor = indexMonitorRequest.monitorV2 as PPLMonitor
-                validatePplMonitor(pplMonitor)
-                pplMonitor
-            }
-            else -> throw IllegalArgumentException("received unsupported monitor type to index: ${indexMonitorRequest.monitorV2.javaClass}")
-        }
+        var monitorV2 = indexMonitorRequest.monitorV2
+//        var monitorV2 = when (indexMonitorRequest.monitorV2) {
+//            is PPLMonitor -> {
+//                val pplMonitor = indexMonitorRequest.monitorV2 as PPLMonitor
+//                validatePplMonitor(pplMonitor)
+//                pplMonitor
+//            }
+//            else -> throw IllegalArgumentException("received unsupported monitor type to index: ${indexMonitorRequest.monitorV2.javaClass}")
+//        }
 
         if (user != null) {
             // Use the backend roles which is an intersection of the requested backend roles and the user's backend roles.
@@ -607,14 +735,10 @@ class TransportIndexMonitorV2Action @Inject constructor(
             else if (!isAdmin(user)) indexMonitorRequest.rbacRoles.intersect(user.backendRoles).toSet()
             else indexMonitorRequest.rbacRoles
 
-            monitorV2 = when (monitorV2) {
-                is PPLMonitor -> monitorV2.copy(
-                    user = User(user.name, rbacRoles.toList(), user.roles, user.customAttNames)
-                )
-                else -> throw IllegalArgumentException(
-                    "received unsupported monitor type when resolving backend roles: ${indexMonitorRequest.monitorV2.javaClass}"
-                )
-            }
+            monitorV2 = monitorV2.makeCopy(
+                user = User(user.name, rbacRoles.toList(), user.roles, user.customAttNames)
+            )
+
             log.debug("Created monitor's backend roles: $rbacRoles")
         }
 
@@ -653,26 +777,6 @@ class TransportIndexMonitorV2Action @Inject constructor(
             )
         } catch (t: Exception) {
             actionListener.onFailure(AlertingException.wrap(t))
-        }
-    }
-
-    /* Utils */
-    private fun validatePplMonitor(pplMonitor: PPLMonitor) {
-        // ensure the trigger suppress durations are valid
-        pplMonitor.triggers.forEach { trigger ->
-            trigger.suppressDuration?.let { suppressDuration ->
-                require(suppressDuration <= maxSuppressDuration) {
-                    "Suppress duration must be at most $maxSuppressDuration but was $suppressDuration"
-                }
-                require(suppressDuration >= minSuppressDuration) {
-                    "Suppress duration must be at least $minSuppressDuration but was $suppressDuration"
-                }
-            }
-        }
-
-        // ensure the query length doesn't exceed the limit
-        require(pplMonitor.query.length <= maxQueryLength) {
-            "PPL Query length must be at most $maxQueryLength but was ${pplMonitor.query.length}"
         }
     }
 }

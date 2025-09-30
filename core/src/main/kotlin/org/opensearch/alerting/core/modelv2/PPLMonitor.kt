@@ -9,6 +9,7 @@ import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NO_ID
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NO_VERSION
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.SCHEDULE_FIELD
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.SCHEMA_VERSION_FIELD
+import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.TIMESTAMP_FIELD
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.TRIGGERS_FIELD
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.USER_FIELD
 import org.opensearch.alerting.core.util.nonOptionalTimeField
@@ -59,7 +60,8 @@ data class PPLMonitor(
     override val name: String,
     override val enabled: Boolean,
     override val schedule: Schedule,
-    override val lookBackWindow: TimeValue,
+    override val lookBackWindow: TimeValue?,
+    override val timestampField: String?,
     override val lastUpdateTime: Instant,
     override val enabledTime: Instant?,
     override val user: User?,
@@ -91,8 +93,6 @@ data class PPLMonitor(
         } else {
             require(enabledTime == null)
         }
-
-        // TODO: create setting for max triggers and check for max triggers here
     }
 
     @Throws(IOException::class)
@@ -102,7 +102,10 @@ data class PPLMonitor(
         name = sin.readString(),
         enabled = sin.readBoolean(),
         schedule = Schedule.readFrom(sin),
-        lookBackWindow = TimeValue.parseTimeValue(sin.readString(), PLACEHOLDER_LOOK_BACK_WINDOW_SETTING_NAME),
+        lookBackWindow = sin.readString()?.let {
+            TimeValue.parseTimeValue(it, PLACEHOLDER_LOOK_BACK_WINDOW_SETTING_NAME)
+        },
+        timestampField = sin.readOptionalString(),
         lastUpdateTime = sin.readInstant(),
         enabledTime = sin.readOptionalInstant(),
         user = if (sin.readBoolean()) {
@@ -116,7 +119,7 @@ data class PPLMonitor(
         query = sin.readString()
     )
 
-    fun toXContentWithUser(builder: XContentBuilder, params: ToXContent.Params): XContentBuilder {
+    override fun toXContentWithUser(builder: XContentBuilder, params: ToXContent.Params): XContentBuilder {
         return createXContentBuilder(builder, params, true)
     }
 
@@ -141,6 +144,7 @@ data class PPLMonitor(
         builder.field(NAME_FIELD, name)
         builder.field(SCHEDULE_FIELD, schedule)
         builder.field(LOOK_BACK_WINDOW_FIELD, lookBackWindow?.toHumanReadableString(0))
+        builder.field(TIMESTAMP_FIELD, timestampField)
         builder.field(ENABLED_FIELD, enabled)
         builder.nonOptionalTimeField(LAST_UPDATE_TIME_FIELD, lastUpdateTime)
         builder.optionalTimeField(ENABLED_TIME_FIELD, enabledTime)
@@ -180,6 +184,7 @@ data class PPLMonitor(
         out.writeBoolean(lookBackWindow != null)
         lookBackWindow?.let { out.writeString(lookBackWindow.toHumanReadableString(0)) }
 
+        out.writeOptionalString(timestampField)
         out.writeInstant(lastUpdateTime)
         out.writeOptionalInstant(enabledTime)
 
@@ -206,6 +211,34 @@ data class PPLMonitor(
             TRIGGERS_FIELD to triggers,
             QUERY_LANGUAGE_FIELD to queryLanguage.value,
             QUERY_FIELD to query
+        )
+    }
+
+    override fun makeCopy(
+        id: String,
+        version: Long,
+        name: String,
+        enabled: Boolean,
+        schedule: Schedule,
+        lastUpdateTime: Instant,
+        enabledTime: Instant?,
+        user: User?,
+        schemaVersion: Int,
+        lookBackWindow: TimeValue?,
+        timestampField: String?
+    ): PPLMonitor {
+        return copy(
+            id = id,
+            version = version,
+            name = name,
+            enabled = enabled,
+            schedule = schedule,
+            lastUpdateTime = lastUpdateTime,
+            enabledTime = enabledTime,
+            user = user,
+            schemaVersion = schemaVersion,
+            lookBackWindow = lookBackWindow,
+            timestampField = timestampField
         )
     }
 
@@ -245,7 +278,8 @@ data class PPLMonitor(
             var name: String? = null
             var enabled = true
             var schedule: Schedule? = null
-            var lookBackWindow = DEFAULT_LOOK_BACK_WINDOW
+            var lookBackWindow: TimeValue? = null
+            var timestampField: String? = null
             var lastUpdateTime: Instant? = null
             var enabledTime: Instant? = null
             var user: User? = null
@@ -276,6 +310,7 @@ data class PPLMonitor(
                             }
                         }
                     }
+                    TIMESTAMP_FIELD -> timestampField = if (xcp.currentToken() == XContentParser.Token.VALUE_NULL) null else xcp.text()
                     LAST_UPDATE_TIME_FIELD -> lastUpdateTime = xcp.instant()
                     ENABLED_TIME_FIELD -> enabledTime = xcp.instant()
                     USER_FIELD -> user = if (xcp.currentToken() == XContentParser.Token.VALUE_NULL) null else User.parse(xcp)
@@ -327,6 +362,9 @@ data class PPLMonitor(
             requireNotNull(schedule) { "Schedule is null" }
             requireNotNull(query) { "Query is null" }
             requireNotNull(lastUpdateTime) { "Last update time is null" }
+            if (lookBackWindow != null) {
+                requireNotNull(timestampField) { "If look back window is specified, timestamp field must not be null" }
+            }
 
             if (queryLanguage == QueryLanguage.SQL) {
                 throw IllegalArgumentException("SQL queries are not supported. Please use a PPL query.")
@@ -340,6 +378,7 @@ data class PPLMonitor(
                 enabled,
                 schedule,
                 lookBackWindow,
+                timestampField,
                 lastUpdateTime,
                 enabledTime,
                 user,

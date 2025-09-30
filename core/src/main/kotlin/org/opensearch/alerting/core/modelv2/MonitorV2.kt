@@ -10,6 +10,8 @@ import org.opensearch.core.ParseField
 import org.opensearch.core.common.io.stream.StreamInput
 import org.opensearch.core.common.io.stream.StreamOutput
 import org.opensearch.core.xcontent.NamedXContentRegistry
+import org.opensearch.core.xcontent.ToXContent
+import org.opensearch.core.xcontent.XContentBuilder
 import org.opensearch.core.xcontent.XContentParser
 import org.opensearch.core.xcontent.XContentParserUtils
 import java.io.IOException
@@ -26,9 +28,27 @@ interface MonitorV2 : ScheduledJob {
     val user: User?
     val triggers: List<TriggerV2>
     val schemaVersion: Int // for updating monitors
-    val lookBackWindow: TimeValue // how far back to look when querying data during monitor execution
+    val lookBackWindow: TimeValue? // how far back to look when querying data during monitor execution
+    val timestampField: String? // field that will be used to inject lookback window time filter
 
     fun asTemplateArg(): Map<String, Any?>
+
+    fun toXContentWithUser(builder: XContentBuilder, params: ToXContent.Params): XContentBuilder
+
+    fun makeCopy(
+        id: String = this.id,
+        version: Long = this.version,
+        name: String = this.name,
+        enabled: Boolean = this.enabled,
+        schedule: Schedule = this.schedule,
+        lastUpdateTime: Instant = this.lastUpdateTime,
+        enabledTime: Instant? = this.enabledTime,
+        user: User? = this.user,
+        // not supporting overriding triggers in copy
+        schemaVersion: Int = this.schemaVersion,
+        lookBackWindow: TimeValue? = this.lookBackWindow,
+        timestampField: String? = this.timestampField
+    ): MonitorV2
 
     enum class MonitorV2Type(val value: String) {
         PPL_MONITOR(PPL_MONITOR_TYPE);
@@ -56,8 +76,9 @@ interface MonitorV2 : ScheduledJob {
         const val ENABLED_TIME_FIELD = "enabled_time"
         const val USER_FIELD = "user"
         const val TRIGGERS_FIELD = "triggers"
-        const val LOOK_BACK_WINDOW_FIELD = "look_back_window"
         const val SCHEMA_VERSION_FIELD = "schema_version"
+        const val LOOK_BACK_WINDOW_FIELD = "look_back_window"
+        const val TIMESTAMP_FIELD = "timestamp_field"
 
         // default values
         const val NO_ID = ""

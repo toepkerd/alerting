@@ -150,6 +150,8 @@ dependencies {
     // Needed for integ tests
     zipArchive group: 'org.opensearch.plugin', name:'opensearch-notifications-core', version: "${opensearch_build}"
     zipArchive group: 'org.opensearch.plugin', name:'notifications', version: "${opensearch_build}"
+    zipArchive group: 'org.opensearch.plugin', name:'opensearch-job-scheduler', version: "${opensearch_build}"
+    zipArchive group: 'org.opensearch.plugin', name:'opensearch-sql-plugin', version: "${opensearch_build}"
 
     // Needed for security tests
     if (securityEnabled) {
@@ -243,6 +245,28 @@ testClusters.integTest {
             File getAsFile() {
                 return configurations.zipArchive.asFileTree.matching {
                     include '**/notifications*'
+                }.singleFile
+            }
+        }
+    }))
+
+    plugin(provider({
+        new RegularFile() {
+            @Override
+            File getAsFile() {
+                return configurations.zipArchive.asFileTree.matching {
+                    include '**/opensearch-job-scheduler*'
+                }.singleFile
+            }
+        }
+    }))
+
+    plugin(provider({
+        new RegularFile() {
+            @Override
+            File getAsFile() {
+                return configurations.zipArchive.asFileTree.matching {
+                    include '**/opensearch-sql-plugin*'
                 }.singleFile
             }
         }
