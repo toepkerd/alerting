@@ -132,10 +132,10 @@ class TransportIndexMonitorV2Action @Inject constructor(
                             val pplMonitor = indexMonitorV2Request.monitorV2 as PPLMonitor
                             if (user == null) {
                                 indexMonitorV2Request.monitorV2 = pplMonitor
-                                    .copy(user = User("", listOf(), listOf(), mapOf()))
+                                    .copy(user = User("", listOf(), listOf(), listOf()))
                             } else {
                                 indexMonitorV2Request.monitorV2 = pplMonitor
-                                    .copy(user = User(user.name, user.backendRoles, user.roles, user.customAttributes))
+                                    .copy(user = User(user.name, user.backendRoles, user.roles, user.customAttNames))
                             }
                             checkScheduledJobIndex(indexMonitorV2Request, actionListener, user)
                         }
@@ -502,7 +502,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
             if (indexMonitorRequest.rbacRoles != null) {
                 if (isAdmin(user)) {
                     newMonitorV2 = newMonitorV2.copy(
-                        user = User(user.name, indexMonitorRequest.rbacRoles, user.roles, user.customAttributes)
+                        user = User(user.name, indexMonitorRequest.rbacRoles, user.roles, user.customAttNames)
                     )
                 } else {
                     // rolesToRemove: these are the backend roles to remove from the monitor
@@ -510,12 +510,12 @@ class TransportIndexMonitorV2Action @Inject constructor(
                     // remove the monitor's roles with rolesToRemove and add any roles passed into the request.rbacRoles
                     val updatedRbac = currentMonitorV2.user?.backendRoles.orEmpty() - rolesToRemove + indexMonitorRequest.rbacRoles
                     newMonitorV2 = newMonitorV2.copy(
-                        user = User(user.name, updatedRbac, user.roles, user.customAttributes)
+                        user = User(user.name, updatedRbac, user.roles, user.customAttNames)
                     )
                 }
             } else {
                 newMonitorV2 = newMonitorV2
-                    .copy(user = User(user.name, currentMonitorV2.user!!.backendRoles, user.roles, user.customAttributes))
+                    .copy(user = User(user.name, currentMonitorV2.user!!.backendRoles, user.roles, user.customAttNames))
             }
             log.info("Update monitor backend roles to: ${newMonitorV2.user?.backendRoles}")
         }
@@ -609,7 +609,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
 
             monitorV2 = when (monitorV2) {
                 is PPLMonitor -> monitorV2.copy(
-                    user = User(user.name, rbacRoles.toList(), user.roles, user.customAttributes)
+                    user = User(user.name, rbacRoles.toList(), user.roles, user.customAttNames)
                 )
                 else -> throw IllegalArgumentException(
                     "received unsupported monitor type when resolving backend roles: ${indexMonitorRequest.monitorV2.javaClass}"
