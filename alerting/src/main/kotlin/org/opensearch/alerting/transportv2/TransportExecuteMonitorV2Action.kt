@@ -1,3 +1,8 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.transportv2
 
 import kotlinx.coroutines.Dispatchers
@@ -169,13 +174,17 @@ class TransportExecuteMonitorV2Action @Inject constructor(
                             val monitorV2 = scheduledJob as MonitorV2
 
                             // security is enabled and filterby is enabled
-                            if (!checkUserPermissionsWithResource(
-                                    user,
-                                    monitorV2.user,
-                                    actionListener,
-                                    "monitor",
-                                    execMonitorV2Request.monitorV2Id
-                                )
+                            // only run this check on manual executions,
+                            // automatic scheduled job executions should
+                            // bypass this check and proceed to execution
+                            if (execMonitorV2Request.manual &&
+                                !checkUserPermissionsWithResource(
+                                        user,
+                                        monitorV2.user,
+                                        actionListener,
+                                        "monitor",
+                                        execMonitorV2Request.monitorV2Id
+                                    )
                             ) {
                                 return
                             }

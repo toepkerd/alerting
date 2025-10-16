@@ -327,27 +327,41 @@ class AlertingSettings {
         val ALERTING_V2_MAX_MONITORS = Setting.intSetting(
             "plugins.alerting_v2.monitor.max_monitors",
             1000,
+            1,
             Setting.Property.NodeScope, Setting.Property.Dynamic
         )
 
-        val ALERTING_V2_MAX_TRIGGERS = Setting.intSetting(
-            "plugins.alerting_v2.monitor.max_triggers",
-            10,
+        val ALERTING_V2_MAX_THROTTLE_DURATION = Setting.longSetting(
+            "plugins.alerting_v2.monitor.max_throttle_duration",
+            7200L, // 5 days, 7200 minutes
+            2L,
             Setting.Property.NodeScope, Setting.Property.Dynamic
         )
 
-        val ALERTING_V2_MAX_SUPPRESSION_DURATION = Setting.positiveTimeSetting(
-            "plugins.alerting_v2.monitor.max_suppression_duration",
-            TimeValue(5, TimeUnit.DAYS),
+        val ALERTING_V2_MAX_EXPIRE_DURATION = Setting.longSetting(
+            "plugins.alerting_v2.monitor.max_expire_duration",
+            43200L, // 30 days, 43200 minutes
+            2L,
             Setting.Property.NodeScope, Setting.Property.Dynamic
         )
 
         val ALERTING_V2_MAX_QUERY_LENGTH = Setting.longSetting(
             "plugins.alerting_v2.monitor.max_query_length",
             2000L,
+            0L,
             Setting.Property.NodeScope, Setting.Property.Dynamic
         )
 
+        // max data rows to retrieve when executing PPL query against
+        // SQL/PPL plugin during monitor execution
+        val ALERT_V2_QUERY_RESULTS_MAX_DATAROWS = Setting.longSetting(
+            "plugins.alerting_v2.query_results_max_datarows",
+            1000L,
+            1L,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        // max size of query results to store in alerts and notifications
         val ALERT_V2_QUERY_RESULTS_MAX_SIZE = Setting.longSetting(
             "plugins.alerting_v2.query_results_max_size",
             3000L,

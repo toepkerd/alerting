@@ -1,7 +1,6 @@
 package org.opensearch.alerting.core.modelv2
 
 import org.opensearch.alerting.core.modelv2.PPLTrigger.Companion.PPL_TRIGGER_FIELD
-import org.opensearch.common.unit.TimeValue
 import org.opensearch.commons.alerting.model.action.Action
 import org.opensearch.commons.notifications.model.BaseModel
 import java.time.Instant
@@ -11,8 +10,8 @@ interface TriggerV2 : BaseModel {
     val id: String
     val name: String
     val severity: Severity
-    val suppressDuration: TimeValue?
-    val expireDuration: TimeValue?
+    val throttleDuration: Long?
+    val expireDuration: Long
     var lastTriggeredTime: Instant?
     val actions: List<Action>
 
@@ -40,12 +39,20 @@ interface TriggerV2 : BaseModel {
     }
 
     companion object {
+        // field names
         const val ID_FIELD = "id"
         const val NAME_FIELD = "name"
         const val SEVERITY_FIELD = "severity"
-        const val SUPPRESS_FIELD = "suppress"
+        const val THROTTLE_FIELD = "throttle"
         const val LAST_TRIGGERED_FIELD = "last_triggered_time"
         const val EXPIRE_FIELD = "expires"
         const val ACTIONS_FIELD = "actions"
+
+        // hard, nonadjustable limits
+        const val MONITOR_V2_MIN_THROTTLE_DURATION_MINUTES = 1 // one minute min duration to match scheduled job interval granularity
+        const val MONITOR_V2_MIN_EXPIRE_DURATION_MINUTES = 1 // one minute min duration to match scheduled job interval granularity
+
+        // default fallback values of fields if none are passed in
+        const val DEFAULT_EXPIRE_DURATION = (7 * 24 * 60).toLong() // 7 days in minutes
     }
 }

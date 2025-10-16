@@ -1,3 +1,8 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.transportv2
 
 import kotlinx.coroutines.CoroutineScope
@@ -35,14 +40,15 @@ import org.opensearch.alerting.actionv2.IndexMonitorV2Request
 import org.opensearch.alerting.actionv2.IndexMonitorV2Response
 import org.opensearch.alerting.core.ScheduledJobIndices
 import org.opensearch.alerting.core.modelv2.MonitorV2
+import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.MONITOR_V2_TYPE
 import org.opensearch.alerting.core.modelv2.PPLMonitor
 import org.opensearch.alerting.core.modelv2.PPLTrigger.ConditionType
 import org.opensearch.alerting.opensearchapi.suspendUntil
 import org.opensearch.alerting.settings.AlertingSettings
+import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_EXPIRE_DURATION
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_MONITORS
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_QUERY_LENGTH
-import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_SUPPRESSION_DURATION
-import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_TRIGGERS
+import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_THROTTLE_DURATION
 import org.opensearch.alerting.settings.AlertingSettings.Companion.INDEX_TIMEOUT
 import org.opensearch.alerting.settings.AlertingSettings.Companion.REQUEST_TIMEOUT
 import org.opensearch.alerting.transport.SecureTransportAction
@@ -51,12 +57,10 @@ import org.opensearch.alerting.util.use
 import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.inject.Inject
 import org.opensearch.common.settings.Settings
-import org.opensearch.common.unit.TimeValue
 import org.opensearch.common.xcontent.LoggingDeprecationHandler
 import org.opensearch.common.xcontent.XContentFactory.jsonBuilder
 import org.opensearch.common.xcontent.XContentHelper
 import org.opensearch.common.xcontent.XContentType
-import org.opensearch.commons.alerting.model.Monitor
 import org.opensearch.commons.alerting.model.ScheduledJob
 import org.opensearch.commons.alerting.model.ScheduledJob.Companion.SCHEDULED_JOBS_INDEX
 import org.opensearch.commons.alerting.model.userErrorMessage
@@ -74,7 +78,6 @@ import org.opensearch.tasks.Task
 import org.opensearch.transport.TransportService
 import org.opensearch.transport.client.Client
 import org.opensearch.transport.client.node.NodeClient
-import java.util.concurrent.TimeUnit
 
 private val log = LogManager.getLogger(TransportIndexMonitorV2Action::class.java)
 private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO)
@@ -95,20 +98,17 @@ class TransportIndexMonitorV2Action @Inject constructor(
 
     // adjustable limits (via settings)
     @Volatile private var maxMonitors = ALERTING_V2_MAX_MONITORS.get(settings)
-    @Volatile private var maxTriggers = ALERTING_V2_MAX_TRIGGERS.get(settings)
-    @Volatile private var maxSuppressDuration = ALERTING_V2_MAX_SUPPRESSION_DURATION.get(settings)
+    @Volatile private var maxThrottleDuration = ALERTING_V2_MAX_THROTTLE_DURATION.get(settings)
+    @Volatile private var maxExpireDuration = ALERTING_V2_MAX_EXPIRE_DURATION.get(settings)
     @Volatile private var maxQueryLength = ALERTING_V2_MAX_QUERY_LENGTH.get(settings)
     @Volatile private var requestTimeout = REQUEST_TIMEOUT.get(settings)
     @Volatile private var indexTimeout = INDEX_TIMEOUT.get(settings)
     @Volatile override var filterByEnabled = AlertingSettings.FILTER_BY_BACKEND_ROLES.get(settings)
 
-    // hard, nonadjustable limits
-    private val minSuppressDuration = TimeValue(1L, TimeUnit.MINUTES)
-
     init {
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_MONITORS) { maxMonitors = it }
-        clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_TRIGGERS) { maxTriggers = it }
-        clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_SUPPRESSION_DURATION) { maxSuppressDuration = it }
+        clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_THROTTLE_DURATION) { maxThrottleDuration = it }
+        clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_EXPIRE_DURATION) { maxExpireDuration = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_QUERY_LENGTH) { maxQueryLength = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(REQUEST_TIMEOUT) { requestTimeout = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(INDEX_TIMEOUT) { indexTimeout = it }
@@ -178,59 +178,8 @@ class TransportIndexMonitorV2Action @Inject constructor(
 
                     val pplMonitor = indexMonitorV2Request.monitorV2 as PPLMonitor
 
-                    // TODO: put this in a function like the rest of the validations
-                    // first attempt to run the monitor query and all possible
-                    // extensions of it (from custom conditions)
-                    try {
-                        val nodeClient = client as NodeClient
-
-                        // first run the base query as is.
-                        // if there are any PPL syntax or index not found or other errors,
-                        // this will throw an exception
-                        executePplQuery(pplMonitor.query, nodeClient)
-
-                        // now scan all the triggers with custom conditions, and ensure each query constructed
-                        // from the base query + custom condition is valid
-                        for (pplTrigger in pplMonitor.triggers) {
-                            if (pplTrigger.conditionType != ConditionType.CUSTOM) {
-                                continue
-                            }
-
-                            // TODO: move these functions to the AlertingV2Utils object
-                            val evalResultVar = findEvalResultVar(pplTrigger.customCondition!!)
-
-                            val queryWithCustomCondition = appendCustomCondition(pplMonitor.query, pplTrigger.customCondition!!)
-
-                            val executePplQueryResponse = executePplQuery(queryWithCustomCondition, nodeClient)
-
-                            val evalResultVarIdx = findEvalResultVarIdxInSchema(executePplQueryResponse, evalResultVar)
-
-                            val resultVarType = executePplQueryResponse
-                                .getJSONArray("schema")
-                                .getJSONObject(evalResultVarIdx)
-                                .getString("type")
-
-                            // custom conditions must evaluate to a boolean result, otherwise it's invalid
-                            if (resultVarType != "boolean") {
-                                validationListener.onFailure(
-                                    AlertingException.wrap(
-                                        IllegalArgumentException(
-                                            "Custom condition in trigger ${pplTrigger.name} is invalid because it does not " +
-                                                "evaluate to a boolean, but instead to type: $resultVarType"
-                                        )
-                                    )
-                                )
-                                return@withContext
-                            }
-                        }
-
-                        validationListener.onResponse(Unit)
-                    } catch (e: Exception) {
-                        validationListener.onFailure(
-                            AlertingException.wrap(
-                                IllegalArgumentException("Validation error for PPL Query in PPL Monitor: ${e.userErrorMessage()}")
-                            )
-                        )
+                    val pplQueryValid = validatePplQuery(pplMonitor, validationListener)
+                    if (!pplQueryValid) {
                         return@withContext
                     }
 
@@ -251,47 +200,95 @@ class TransportIndexMonitorV2Action @Inject constructor(
                     if (!timestampFieldValid) {
                         return@withContext
                     }
+
+                    validationListener.onResponse(Unit)
                 }
             }
         }
     }
 
-    private fun validatePplMonitor(pplMonitor: PPLMonitor, validationListener: ActionListener<Unit>): Boolean {
-        // ensure the PPL Monitor only has up to the max number of triggers
-        if (pplMonitor.triggers.size > maxTriggers) {
+    private suspend fun validatePplQuery(pplMonitor: PPLMonitor, validationListener: ActionListener<Unit>): Boolean {
+        // first attempt to run the monitor query and all possible
+        // extensions of it (from custom conditions)
+        try {
+            val nodeClient = client as NodeClient
+
+            // first run the base query as is.
+            // if there are any PPL syntax or index not found or other errors,
+            // this will throw an exception
+            executePplQuery(pplMonitor.query, nodeClient)
+
+            // now scan all the triggers with custom conditions, and ensure each query constructed
+            // from the base query + custom condition is valid
+            for (pplTrigger in pplMonitor.triggers) {
+                if (pplTrigger.conditionType != ConditionType.CUSTOM) {
+                    continue
+                }
+
+                // TODO: move these functions to the AlertingV2Utils object
+                val evalResultVar = findEvalResultVar(pplTrigger.customCondition!!)
+
+                val queryWithCustomCondition = appendCustomCondition(pplMonitor.query, pplTrigger.customCondition!!)
+
+                val executePplQueryResponse = executePplQuery(queryWithCustomCondition, nodeClient)
+
+                val evalResultVarIdx = findEvalResultVarIdxInSchema(executePplQueryResponse, evalResultVar)
+
+                val resultVarType = executePplQueryResponse
+                    .getJSONArray("schema")
+                    .getJSONObject(evalResultVarIdx)
+                    .getString("type")
+
+                // custom conditions must evaluate to a boolean result, otherwise it's invalid
+                if (resultVarType != "boolean") {
+                    validationListener.onFailure(
+                        AlertingException.wrap(
+                            IllegalArgumentException(
+                                "Custom condition in trigger ${pplTrigger.name} is invalid because it does not " +
+                                    "evaluate to a boolean, but instead to type: $resultVarType"
+                            )
+                        )
+                    )
+                    return false
+                }
+            }
+        } catch (e: Exception) {
             validationListener.onFailure(
                 AlertingException.wrap(
-                    IllegalArgumentException(
-                        "PPL Monitor exceeds the maximum allowed number of triggers"
-                    )
+                    IllegalArgumentException("Validation error for PPL Query in PPL Monitor: ${e.userErrorMessage()}")
                 )
             )
             return false
         }
 
-        // ensure the trigger suppress durations are valid
+        return true
+    }
+
+    private fun validatePplMonitor(pplMonitor: PPLMonitor, validationListener: ActionListener<Unit>): Boolean {
+        // ensure the trigger throttle and expire durations are valid
         pplMonitor.triggers.forEach { trigger ->
-            trigger.suppressDuration?.let { suppressDuration ->
-                if (suppressDuration > maxSuppressDuration) {
+            trigger.throttleDuration?.let { throttleDuration ->
+                if (throttleDuration > maxThrottleDuration) {
                     validationListener.onFailure(
                         AlertingException.wrap(
                             IllegalArgumentException(
-                                "Suppress duration must be at most $maxSuppressDuration but was $suppressDuration"
+                                "Throttle duration must be at most $maxThrottleDuration but was $throttleDuration"
                             )
                         )
                     )
                     return false
                 }
-                if (suppressDuration < minSuppressDuration) {
-                    validationListener.onFailure(
-                        AlertingException.wrap(
-                            IllegalArgumentException(
-                                "Suppress duration must be at least $minSuppressDuration but was $suppressDuration"
-                            )
+            }
+
+            if (trigger.expireDuration > maxExpireDuration) {
+                validationListener.onFailure(
+                    AlertingException.wrap(
+                        IllegalArgumentException(
+                            "Expire duration must be at most $maxExpireDuration but was ${trigger.expireDuration}"
                         )
                     )
-                    return false
-                }
+                )
+                return false
             }
         }
 
@@ -519,11 +516,6 @@ class TransportIndexMonitorV2Action @Inject constructor(
         }
     }
 
-    /**
-     * This function prepares for indexing a new monitor.
-     * If this is an update request we can simply update the monitor. Otherwise we first check to see how many monitors already exist,
-     * and compare this to the [maxMonitorCount]. Requests that breach this threshold will be rejected.
-     */
     private fun prepareMonitorIndexing(
         indexMonitorRequest: IndexMonitorV2Request,
         actionListener: ActionListener<IndexMonitorV2Response>,
@@ -534,7 +526,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
                 updateMonitor(indexMonitorRequest, actionListener, user)
             }
         } else { // create monitor case
-            val query = QueryBuilders.boolQuery().filter(QueryBuilders.termQuery("${Monitor.MONITOR_TYPE}.type", Monitor.MONITOR_TYPE))
+            val query = QueryBuilders.boolQuery().filter(QueryBuilders.existsQuery(MONITOR_V2_TYPE))
             val searchSource = SearchSourceBuilder().query(query).timeout(requestTimeout)
             val searchRequest = SearchRequest(SCHEDULED_JOBS_INDEX).source(searchSource)
 
@@ -704,6 +696,7 @@ class TransportIndexMonitorV2Action @Inject constructor(
         user: User?
     ) {
         val totalHits = monitorCountSearchResponse.hits.totalHits?.value
+        log.info("total hits: $totalHits")
         if (totalHits != null && totalHits >= maxMonitors) {
             log.info("This request would create more than the allowed monitors [$maxMonitors].")
             actionListener.onFailure(

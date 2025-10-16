@@ -1,9 +1,15 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.core.modelv2
 
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.ENABLED_FIELD
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.ENABLED_TIME_FIELD
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.LAST_UPDATE_TIME_FIELD
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.LOOK_BACK_WINDOW_FIELD
+import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.MONITOR_V2_MAX_TRIGGERS
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NAME_FIELD
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NO_ID
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NO_VERSION
@@ -13,7 +19,6 @@ import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.TIMESTAMP_FIELD
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.TRIGGERS_FIELD
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.USER_FIELD
 import org.opensearch.alerting.core.util.nonOptionalTimeField
-import org.opensearch.common.unit.TimeValue
 import org.opensearch.commons.alerting.model.CronSchedule
 import org.opensearch.commons.alerting.model.Schedule
 import org.opensearch.commons.alerting.util.AlertingException
@@ -30,9 +35,9 @@ import org.opensearch.core.xcontent.XContentParser
 import org.opensearch.core.xcontent.XContentParserUtils
 import java.io.IOException
 import java.time.Instant
-import java.util.concurrent.TimeUnit
 
-// TODO: probably change this to be called PPLSQLMonitor. A PPL Monitor and SQL Monitor
+// TODO: eventually change this to be called PPLSQLMonitor.
+//  A PPL Monitor and SQL Monitor
 // would have the exact same functionality, except the choice of language
 // when calling PPL/SQL plugin's execute API would be different.
 // we dont need 2 different monitor types for that, just a simple if check
@@ -59,7 +64,7 @@ data class PPLMonitor(
     override val name: String,
     override val enabled: Boolean,
     override val schedule: Schedule,
-    override val lookBackWindow: TimeValue?,
+    override val lookBackWindow: Long?,
     override val timestampField: String?,
     override val lastUpdateTime: Instant,
     override val enabledTime: Instant?,
@@ -92,6 +97,8 @@ data class PPLMonitor(
         } else {
             require(enabledTime == null)
         }
+
+        require(triggers.size <= MONITOR_V2_MAX_TRIGGERS) { "Monitors can only have $MONITOR_V2_MAX_TRIGGERS triggers" }
     }
 
     @Throws(IOException::class)
@@ -101,9 +108,7 @@ data class PPLMonitor(
         name = sin.readString(),
         enabled = sin.readBoolean(),
         schedule = Schedule.readFrom(sin),
-        lookBackWindow = sin.readString()?.let {
-            TimeValue.parseTimeValue(it, PLACEHOLDER_LOOK_BACK_WINDOW_SETTING_NAME)
-        },
+        lookBackWindow = sin.readOptionalLong(),
         timestampField = sin.readOptionalString(),
         lastUpdateTime = sin.readInstant(),
         enabledTime = sin.readOptionalInstant(),
@@ -142,7 +147,7 @@ data class PPLMonitor(
 
         builder.field(NAME_FIELD, name)
         builder.field(SCHEDULE_FIELD, schedule)
-        builder.field(LOOK_BACK_WINDOW_FIELD, lookBackWindow?.toHumanReadableString(0))
+        builder.field(LOOK_BACK_WINDOW_FIELD, lookBackWindow)
         builder.field(TIMESTAMP_FIELD, timestampField)
         builder.field(ENABLED_FIELD, enabled)
         builder.nonOptionalTimeField(LAST_UPDATE_TIME_FIELD, lastUpdateTime)
@@ -180,9 +185,7 @@ data class PPLMonitor(
             out.writeEnum(Schedule.TYPE.INTERVAL)
         }
 
-        out.writeBoolean(lookBackWindow != null)
-        lookBackWindow?.let { out.writeString(lookBackWindow.toHumanReadableString(0)) }
-
+        out.writeOptionalLong(lookBackWindow)
         out.writeOptionalString(timestampField)
         out.writeInstant(lastUpdateTime)
         out.writeOptionalInstant(enabledTime)
@@ -204,7 +207,7 @@ data class PPLMonitor(
             NAME_FIELD to name,
             ENABLED_FIELD to enabled,
             SCHEDULE_FIELD to schedule,
-            LOOK_BACK_WINDOW_FIELD to lookBackWindow?.toHumanReadableString(0),
+            LOOK_BACK_WINDOW_FIELD to lookBackWindow,
             LAST_UPDATE_TIME_FIELD to lastUpdateTime.toEpochMilli(),
             ENABLED_TIME_FIELD to enabledTime?.toEpochMilli(),
             TRIGGERS_FIELD to triggers,
@@ -223,7 +226,7 @@ data class PPLMonitor(
         enabledTime: Instant?,
         user: User?,
         schemaVersion: Int,
-        lookBackWindow: TimeValue?,
+        lookBackWindow: Long?,
         timestampField: String?
     ): PPLMonitor {
         return copy(
@@ -262,14 +265,6 @@ data class PPLMonitor(
         const val QUERY_LANGUAGE_FIELD = "query_language"
         const val QUERY_FIELD = "query"
 
-        // default fallback values of fields if none are passed in
-        val DEFAULT_LOOK_BACK_WINDOW = TimeValue(1L, TimeUnit.HOURS)
-
-        // mock setting name used when parsing TimeValue
-        // TimeValue class is usually reserved for declaring settings, but we're using it
-        // outside that use case here, which is why we need these placeholders
-        private const val PLACEHOLDER_LOOK_BACK_WINDOW_SETTING_NAME = "ppl_monitor_look_back_window"
-
         @JvmStatic
         @JvmOverloads
         @Throws(IOException::class)
@@ -277,7 +272,7 @@ data class PPLMonitor(
             var name: String? = null
             var enabled = true
             var schedule: Schedule? = null
-            var lookBackWindow: TimeValue? = null
+            var lookBackWindow: Long? = null
             var timestampField: String? = null
             var lastUpdateTime: Instant? = null
             var enabledTime: Instant? = null
@@ -299,14 +294,7 @@ data class PPLMonitor(
                     SCHEDULE_FIELD -> schedule = Schedule.parse(xcp)
                     LOOK_BACK_WINDOW_FIELD -> {
                         if (xcp.currentToken() != XContentParser.Token.VALUE_NULL) {
-                            val input = xcp.text()
-                            try {
-                                lookBackWindow = TimeValue.parseTimeValue(input, PLACEHOLDER_LOOK_BACK_WINDOW_SETTING_NAME)
-                            } catch (e: Exception) {
-                                throw AlertingException.wrap(
-                                    IllegalArgumentException("Invalid value for field $LOOK_BACK_WINDOW_FIELD", e)
-                                )
-                            }
+                            lookBackWindow = xcp.longValue()
                         }
                     }
                     TIMESTAMP_FIELD -> timestampField = if (xcp.currentToken() == XContentParser.Token.VALUE_NULL) null else xcp.text()

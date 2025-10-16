@@ -1,3 +1,8 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.resthandlerv2
 
 import org.apache.logging.log4j.LogManager
@@ -27,6 +32,10 @@ class RestGetMonitorV2Action : BaseRestHandler() {
         return listOf(
             Route(
                 GET,
+                "${AlertingPlugin.MONITOR_V2_BASE_URI}/{monitorV2Id}"
+            ),
+            Route(
+                HEAD,
                 "${AlertingPlugin.MONITOR_V2_BASE_URI}/{monitorV2Id}"
             )
         )

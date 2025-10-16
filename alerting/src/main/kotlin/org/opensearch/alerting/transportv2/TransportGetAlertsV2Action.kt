@@ -1,3 +1,8 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.transportv2
 
 import kotlinx.coroutines.CoroutineScope
@@ -13,6 +18,8 @@ import org.opensearch.alerting.actionv2.GetAlertsV2Request
 import org.opensearch.alerting.actionv2.GetAlertsV2Response
 import org.opensearch.alerting.alertsv2.AlertV2Indices
 import org.opensearch.alerting.core.modelv2.AlertV2
+import org.opensearch.alerting.core.modelv2.AlertV2.Companion.MONITOR_V2_NAME_FIELD
+import org.opensearch.alerting.core.modelv2.AlertV2.Companion.TRIGGER_V2_NAME_FIELD
 import org.opensearch.alerting.opensearchapi.addFilter
 import org.opensearch.alerting.settings.AlertingSettings
 import org.opensearch.alerting.transport.SecureTransportAction
@@ -105,8 +112,8 @@ class TransportGetAlertsV2Action @Inject constructor(
                     QueryBuilders
                         .queryStringQuery(tableProp.searchString)
                         .defaultOperator(Operator.AND)
-                        .field("monitor_name")
-                        .field("trigger_name")
+                        .field(MONITOR_V2_NAME_FIELD)
+                        .field(TRIGGER_V2_NAME_FIELD)
                 )
         }
         val searchSourceBuilder = SearchSourceBuilder()

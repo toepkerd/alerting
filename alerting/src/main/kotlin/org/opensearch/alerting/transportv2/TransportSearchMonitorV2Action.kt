@@ -1,9 +1,16 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.transportv2
 
 import org.apache.logging.log4j.LogManager
 import org.opensearch.action.search.SearchResponse
 import org.opensearch.action.support.ActionFilters
 import org.opensearch.action.support.HandledTransportAction
+import org.opensearch.alerting.AlertingV2Utils.getEmptySearchResponse
+import org.opensearch.alerting.AlertingV2Utils.isIndexNotFoundException
 import org.opensearch.alerting.actionv2.SearchMonitorV2Action
 import org.opensearch.alerting.actionv2.SearchMonitorV2Request
 import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.MONITOR_V2_TYPE
@@ -44,10 +51,6 @@ class TransportSearchMonitorV2Action @Inject constructor(
     }
 
     override fun doExecute(task: Task, request: SearchMonitorV2Request, actionListener: ActionListener<SearchResponse>) {
-
-        // TODO: if alerting-config index doesnt exist, OS error is thrown to customer saying that much, try to catch that and
-        // throw more explicit error like "no monitorV2 exists"
-
         val searchSourceBuilder = request.searchRequest.source()
 
         val queryBuilder = if (searchSourceBuilder.query() == null) BoolQueryBuilder()
@@ -77,8 +80,15 @@ class TransportSearchMonitorV2Action @Inject constructor(
                         actionListener.onResponse(response)
                     }
 
-                    override fun onFailure(t: Exception) {
-                        actionListener.onFailure(AlertingException.wrap(t))
+                    override fun onFailure(e: Exception) {
+                        if (isIndexNotFoundException(e)) {
+                            log.error("Index not found while searching monitor", e)
+                            val emptyResponse = getEmptySearchResponse()
+                            actionListener.onResponse(emptyResponse)
+                        } else {
+                            log.error("Unexpected error while searching monitor", e)
+                            actionListener.onFailure(AlertingException.wrap(e))
+                        }
                     }
                 }
             )

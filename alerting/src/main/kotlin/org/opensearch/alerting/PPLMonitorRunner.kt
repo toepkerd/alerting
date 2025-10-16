@@ -1,3 +1,8 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting
 
 import org.apache.logging.log4j.LogManager
@@ -47,6 +52,7 @@ import java.time.Instant
 import java.time.ZoneOffset.UTC
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
+import java.util.Locale
 
 object PPLMonitorRunner : MonitorV2Runner {
     private val logger = LogManager.getLogger(javaClass)
@@ -101,7 +107,7 @@ object PPLMonitorRunner : MonitorV2Runner {
             // if lookback window is specified, inject a top level lookback window time filter
             // into the PPL query
             val lookBackWindow = pplMonitor.lookBackWindow!!
-            val lookbackPeriodStart = periodEnd.minus(lookBackWindow.millis, ChronoUnit.MILLIS)
+            val lookbackPeriodStart = periodEnd.minus(lookBackWindow, ChronoUnit.MINUTES)
             val timeFilteredQuery = addTimeFilter(pplMonitor.query, lookbackPeriodStart, periodEnd, pplMonitor.timestampField!!)
             logger.info("time filtered query: $timeFilteredQuery")
             timeFilteredQuery
@@ -116,18 +122,18 @@ object PPLMonitorRunner : MonitorV2Runner {
         // run each trigger
         for (pplTrigger in pplMonitor.triggers) {
             try {
-                // check for suppression and skip execution
+                // check for throttle and skip execution
                 // before even running the trigger itself
-                val suppressed = checkForSuppress(pplTrigger, timeOfCurrentExecution, manual)
-                if (suppressed) {
-                    logger.info("suppressing trigger ${pplTrigger.name} from monitor ${pplMonitor.name}")
+                val throttled = checkForThrottle(pplTrigger, timeOfCurrentExecution, manual)
+                if (throttled) {
+                    logger.info("throttling trigger ${pplTrigger.name} from monitor ${pplMonitor.name}")
 
-                    // automatically set this trigger to untriggered
+                    // automatically return that this trigger is untriggered
                     triggerResults[pplTrigger.id] = PPLTriggerRunResult(pplTrigger.name, false, null)
 
                     continue
                 }
-                logger.info("suppression check passed, executing trigger ${pplTrigger.name} from monitor ${pplMonitor.name}")
+                logger.info("throttle check passed, executing trigger ${pplTrigger.name} from monitor ${pplMonitor.name}")
 
                 // if trigger uses custom condition, append the custom condition to query, otherwise simply proceed
                 val queryToExecute = if (pplTrigger.conditionType == ConditionType.NUMBER_OF_RESULTS) { // number of results trigger
@@ -135,6 +141,10 @@ object PPLMonitorRunner : MonitorV2Runner {
                 } else { // custom condition trigger
                     appendCustomCondition(timeFilteredQuery, pplTrigger.customCondition!!)
                 }
+
+                // limit the number of PPL query result data rows returned
+                val dataRowsLimit = monitorCtx.clusterService!!.clusterSettings.get(AlertingSettings.ALERT_V2_QUERY_RESULTS_MAX_DATAROWS)
+                val limitedQueryToExecute = appendDataRowsLimit(queryToExecute, dataRowsLimit)
 
                 // execute the PPL query
                 val queryResponseJson = withClosableContext(
@@ -146,7 +156,7 @@ object PPLMonitorRunner : MonitorV2Runner {
                         pplMonitor.user
                     )
                 ) {
-                    executePplQuery(queryToExecute, nodeClient)
+                    executePplQuery(limitedQueryToExecute, nodeClient)
                 }
                 logger.info("query execution results for trigger ${pplTrigger.name}: $queryResponseJson")
 
@@ -201,7 +211,7 @@ object PPLMonitorRunner : MonitorV2Runner {
                         timeOfCurrentExecution
                     )
 
-                    // update the trigger's last execution time for future suppression checks
+                    // update the trigger's last execution time for future throttle checks
                     pplTrigger.lastTriggeredTime = timeOfCurrentExecution
 
                     // send alert notifications
@@ -246,7 +256,7 @@ object PPLMonitorRunner : MonitorV2Runner {
             }
         }
 
-        // for suppression checking purposes, reindex the PPL Monitor into the alerting-config index
+        // for throttle checking purposes, reindex the PPL Monitor into the alerting-config index
         // with updated last triggered times for each of its triggers
         if (triggerResults.any { it.value.triggered }) {
             updateMonitorWithLastTriggeredTimes(pplMonitor, nodeClient)
@@ -260,23 +270,23 @@ object PPLMonitorRunner : MonitorV2Runner {
         )
     }
 
-    // returns true if the pplTrigger should be suppressed
-    private fun checkForSuppress(pplTrigger: PPLTrigger, timeOfCurrentExecution: Instant, manual: Boolean): Boolean {
-        // manual calls from the user to execute a monitor should never be suppressed
+    // returns true if the pplTrigger should be throttled
+    private fun checkForThrottle(pplTrigger: PPLTrigger, timeOfCurrentExecution: Instant, manual: Boolean): Boolean {
+        // manual calls from the user to execute a monitor should never be throttled
         if (manual) {
             return false
         }
 
-        // the interval between throttledTimeBound and now is the suppression window
-        // i.e. any PPLTrigger whose last trigger time is in this window must be suppressed
-        val suppressTimeBound = pplTrigger.suppressDuration?.let {
-            timeOfCurrentExecution.minus(pplTrigger.suppressDuration!!.millis, ChronoUnit.MILLIS)
+        // the interval between throttledTimeBound and now is the throttle window
+        // i.e. any PPLTrigger whose last trigger time is in this window must be throttled
+        val throttleTimeBound = pplTrigger.throttleDuration?.let {
+            timeOfCurrentExecution.minus(pplTrigger.throttleDuration!!, ChronoUnit.MINUTES)
         }
 
-        // the trigger must be suppressed if...
-        return pplTrigger.suppressDuration != null && // suppression is enabled on the PPLTrigger
+        // the trigger must be throttled if...
+        return pplTrigger.throttleDuration != null && // throttling is enabled on the PPLTrigger
             pplTrigger.lastTriggeredTime != null && // and it has triggered before at least once
-            pplTrigger.lastTriggeredTime!!.isAfter(suppressTimeBound!!) // and it's not yet out of the suppression window
+            pplTrigger.lastTriggeredTime!!.isAfter(throttleTimeBound!!) // and it's not yet out of the throttle window
     }
 
     // adds monitor schedule-based time filter
@@ -286,7 +296,7 @@ object PPLMonitorRunner : MonitorV2Runner {
     // lookBackWindow: customer's desired query look back window, overrides [periodStart, periodEnd] if not null
     private fun addTimeFilter(query: String, lookbackPeriodStart: Instant, periodEnd: Instant, timestampField: String): String {
         // PPL plugin only accepts timestamp strings in this format
-        val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(UTC)
+        val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT).withZone(UTC)
 
         val periodStartPplTimestamp = formatter.format(lookbackPeriodStart)
         val periodEndPplTimeStamp = formatter.format(periodEnd)
@@ -419,7 +429,7 @@ object PPLMonitorRunner : MonitorV2Runner {
         executionId: String,
         timeOfCurrentExecution: Instant
     ): List<AlertV2> {
-        val expirationTime = pplTrigger.expireDuration.millis.let { timeOfCurrentExecution.plus(it, ChronoUnit.MILLIS) }
+        val expirationTime = timeOfCurrentExecution.plus(pplTrigger.expireDuration, ChronoUnit.MINUTES)
 
         val alertV2s = mutableListOf<AlertV2>()
         for (queryResult in preparedQueryResults) {
@@ -450,7 +460,7 @@ object PPLMonitorRunner : MonitorV2Runner {
         executionId: String,
         timeOfCurrentExecution: Instant
     ): List<AlertV2> {
-        val expirationTime = pplTrigger.expireDuration.millis.let { timeOfCurrentExecution.plus(it, ChronoUnit.MILLIS) }
+        val expirationTime = timeOfCurrentExecution.plus(pplTrigger.expireDuration, ChronoUnit.MILLIS)
 
         val errorMessage = "Failed to run PPL Trigger ${pplTrigger.name} from PPL Monitor ${pplMonitor.name}: " +
             exception.userErrorMessage()
@@ -575,6 +585,10 @@ object PPLMonitorRunner : MonitorV2Runner {
     // appends user-defined custom trigger condition to PPL query, only for custom condition Triggers
     fun appendCustomCondition(query: String, customCondition: String): String {
         return "$query | $customCondition"
+    }
+
+    fun appendDataRowsLimit(query: String, maxDataRows: Long): String {
+        return "$query | head $maxDataRows"
     }
 
     // returns PPL query response as parsable JSONObject

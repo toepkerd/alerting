@@ -1,8 +1,12 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.core.modelv2
 
 import org.opensearch.alerting.core.modelv2.PPLMonitor.Companion.PPL_MONITOR_TYPE
 import org.opensearch.common.CheckedFunction
-import org.opensearch.common.unit.TimeValue
 import org.opensearch.commons.alerting.model.Schedule
 import org.opensearch.commons.alerting.model.ScheduledJob
 import org.opensearch.commons.authuser.User
@@ -28,7 +32,7 @@ interface MonitorV2 : ScheduledJob {
     val user: User?
     val triggers: List<TriggerV2>
     val schemaVersion: Int // for updating monitors
-    val lookBackWindow: TimeValue? // how far back to look when querying data during monitor execution
+    val lookBackWindow: Long? // how far back to look when querying data during monitor execution
     val timestampField: String? // field that will be used to inject lookback window time filter
 
     fun asTemplateArg(): Map<String, Any?>
@@ -44,9 +48,9 @@ interface MonitorV2 : ScheduledJob {
         lastUpdateTime: Instant = this.lastUpdateTime,
         enabledTime: Instant? = this.enabledTime,
         user: User? = this.user,
-        // not supporting overriding triggers in copy
+        // no support for overriding triggers in copy
         schemaVersion: Int = this.schemaVersion,
-        lookBackWindow: TimeValue? = this.lookBackWindow,
+        lookBackWindow: Long? = this.lookBackWindow,
         timestampField: String? = this.timestampField
     ): MonitorV2
 
@@ -83,6 +87,9 @@ interface MonitorV2 : ScheduledJob {
         // default values
         const val NO_ID = ""
         const val NO_VERSION = 1L
+
+        // hard, nonadjustable limits
+        const val MONITOR_V2_MAX_TRIGGERS = 10
 
         val XCONTENT_REGISTRY = NamedXContentRegistry.Entry(
             ScheduledJob::class.java,

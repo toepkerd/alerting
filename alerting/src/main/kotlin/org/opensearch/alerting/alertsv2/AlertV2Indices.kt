@@ -1,3 +1,8 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.alertsv2
 
 import kotlinx.coroutines.CoroutineScope
@@ -192,7 +197,7 @@ class AlertV2Indices(
         } else {
             updateIndexMapping(ALERT_V2_HISTORY_WRITE_INDEX, alertV2Mapping(), true)
         }
-        alertV2HistoryIndexInitialized // TODO: potentially delete this
+        alertV2HistoryIndexInitialized
     }
 
     private fun rolloverAndDeleteAlertV2HistoryIndices() {

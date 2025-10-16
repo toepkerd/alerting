@@ -1,3 +1,8 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.transportv2
 
 import kotlinx.coroutines.CoroutineScope
@@ -8,6 +13,7 @@ import org.opensearch.action.get.GetRequest
 import org.opensearch.action.get.GetResponse
 import org.opensearch.action.support.ActionFilters
 import org.opensearch.action.support.HandledTransportAction
+import org.opensearch.alerting.AlertingV2Utils.isIndexNotFoundException
 import org.opensearch.alerting.AlertingV2Utils.validateMonitorV2
 import org.opensearch.alerting.actionv2.GetMonitorV2Action
 import org.opensearch.alerting.actionv2.GetMonitorV2Request
@@ -49,8 +55,7 @@ class TransportGetMonitorV2Action @Inject constructor(
 ),
     SecureTransportAction {
 
-    @Volatile
-    override var filterByEnabled = AlertingSettings.FILTER_BY_BACKEND_ROLES.get(settings)
+    @Volatile override var filterByEnabled = AlertingSettings.FILTER_BY_BACKEND_ROLES.get(settings)
 
     init {
         listenFilterBySettingChange(clusterService)
@@ -92,6 +97,7 @@ class TransportGetMonitorV2Action @Inject constructor(
                             response.sourceAsBytesRef,
                             XContentType.JSON
                         )
+
                         val scheduledJob = ScheduledJob.parse(xcp, response.id, response.version)
 
                         validateMonitorV2(scheduledJob)?.let {
@@ -124,8 +130,18 @@ class TransportGetMonitorV2Action @Inject constructor(
                         )
                     }
 
-                    override fun onFailure(t: Exception) {
-                        actionListener.onFailure(AlertingException.wrap(t))
+                    override fun onFailure(e: Exception) {
+                        if (isIndexNotFoundException(e)) {
+                            log.error("Index not found while getting monitor V2", e)
+                            actionListener.onFailure(
+                                AlertingException.wrap(
+                                    OpenSearchStatusException("Monitor V2 not found. Backing index is missing.", RestStatus.NOT_FOUND, e)
+                                )
+                            )
+                        } else {
+                            log.error("Unexpected error while getting monitor", e)
+                            actionListener.onFailure(AlertingException.wrap(e))
+                        }
                     }
                 }
             )

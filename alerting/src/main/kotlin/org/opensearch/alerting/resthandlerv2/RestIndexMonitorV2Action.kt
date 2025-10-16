@@ -1,3 +1,8 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package org.opensearch.alerting.resthandlerv2
 
 import org.apache.logging.log4j.LogManager
@@ -53,7 +58,7 @@ class RestIndexMonitorV2Action : BaseRestHandler() {
         ensureExpectedToken(Token.START_OBJECT, xcp.nextToken(), xcp)
 
         val monitorV2: MonitorV2
-        val rbacRoles: List<String>? // TODO: do we want to support specifying rbac roles in monitor body?
+        val rbacRoles: List<String>?
         try {
             monitorV2 = MonitorV2.parse(xcp)
             rbacRoles = request.contentParser().map()["rbac_roles"] as List<String>?
