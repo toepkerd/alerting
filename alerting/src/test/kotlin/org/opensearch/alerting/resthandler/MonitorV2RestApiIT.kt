@@ -11,17 +11,24 @@ import org.opensearch.alerting.AlertingPlugin.Companion.MONITOR_V2_BASE_URI
 import org.opensearch.alerting.AlertingRestTestCase
 import org.opensearch.alerting.TEST_INDEX_MAPPINGS
 import org.opensearch.alerting.TEST_INDEX_NAME
-import org.opensearch.alerting.core.modelv2.MonitorV2
-import org.opensearch.alerting.core.modelv2.PPLMonitor
-import org.opensearch.alerting.core.modelv2.PPLTrigger.ConditionType
+import org.opensearch.alerting.assertPplMonitorsEqual
 import org.opensearch.alerting.makeRequest
+import org.opensearch.alerting.modelv2.MonitorV2
+import org.opensearch.alerting.modelv2.PPLMonitor
+import org.opensearch.alerting.modelv2.PPLTrigger.ConditionType
+import org.opensearch.alerting.randomAction
 import org.opensearch.alerting.randomPPLMonitor
 import org.opensearch.alerting.randomPPLTrigger
+import org.opensearch.alerting.randomQueryLevelMonitor
+import org.opensearch.alerting.randomTemplateScript
 import org.opensearch.alerting.resthandler.MonitorRestApiIT.Companion.USE_TYPED_KEYS
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_EXPIRE_DURATION
+import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_LOOK_BACK_WINDOW
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_MONITORS
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_QUERY_LENGTH
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_THROTTLE_DURATION
+import org.opensearch.alerting.settings.AlertingSettings.Companion.NOTIFICATION_MESSAGE_SOURCE_MAX_LENGTH
+import org.opensearch.alerting.settings.AlertingSettings.Companion.NOTIFICATION_SUBJECT_SOURCE_MAX_LENGTH
 import org.opensearch.client.ResponseException
 import org.opensearch.common.UUIDs
 import org.opensearch.common.settings.Settings
@@ -220,7 +227,7 @@ class MonitorV2RestApiIT : AlertingRestTestCase() {
         ensureNumMonitorV2s(1)
     }
 
-    fun `test create ppl monitor with throttle more than default max fails`() {
+    fun `test create ppl monitor with throttle greater than max fails`() {
         val maxThrottleDuration = 60L
         client().updateSettings(ALERTING_V2_MAX_THROTTLE_DURATION.key, maxThrottleDuration)
 
@@ -242,7 +249,7 @@ class MonitorV2RestApiIT : AlertingRestTestCase() {
         ensureNumMonitorV2s(0)
     }
 
-    fun `test create ppl monitor with expire more than default max fails`() {
+    fun `test create ppl monitor with expire greater than max fails`() {
         val maxExpireDuration = 60L
         client().updateSettings(ALERTING_V2_MAX_EXPIRE_DURATION.key, maxExpireDuration)
 
@@ -253,6 +260,26 @@ class MonitorV2RestApiIT : AlertingRestTestCase() {
                     triggers = listOf(
                         randomPPLTrigger(expireDuration = maxExpireDuration + 10)
                     )
+                )
+            )
+            fail("Expected request to fail with BAD_REQUEST but it succeeded")
+        } catch (e: ResponseException) {
+            assertEquals("Unexpected status", RestStatus.BAD_REQUEST, e.response.restStatus())
+        }
+
+        // ensure no monitor was created
+        ensureNumMonitorV2s(0)
+    }
+
+    fun `test create ppl monitor with look back window greater than max fails`() {
+        val maxLookBackWindow = 60L
+        client().updateSettings(ALERTING_V2_MAX_LOOK_BACK_WINDOW.key, maxLookBackWindow)
+
+        // ensure the request fails
+        try {
+            createRandomPPLMonitor(
+                randomPPLMonitor(
+                    lookBackWindow = maxLookBackWindow + 10
                 )
             )
             fail("Expected request to fail with BAD_REQUEST but it succeeded")
@@ -354,6 +381,90 @@ class MonitorV2RestApiIT : AlertingRestTestCase() {
         ensureNumMonitorV2s(0)
     }
 
+    fun `test create ppl monitor with notification subject source too long fails`() {
+        adminClient().updateSettings(NOTIFICATION_SUBJECT_SOURCE_MAX_LENGTH.key, 100)
+
+        var subjectTooLong = ""
+        for (i in 0 until 101) {
+            subjectTooLong += "a"
+        }
+
+        // ensure the request fails
+        try {
+            createRandomPPLMonitor(
+                randomPPLMonitor(
+                    triggers = listOf(
+                        randomPPLTrigger(
+                            actions = listOf(
+                                randomAction(
+                                    template = randomTemplateScript(
+                                        source = "some message"
+                                    ),
+                                    subjectTemplate = randomTemplateScript(
+                                        source = subjectTooLong
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            fail("Expected request to fail with BAD_REQUEST but it succeeded")
+        } catch (e: ResponseException) {
+            assertEquals("Unexpected status", RestStatus.BAD_REQUEST, e.response.restStatus())
+        }
+
+        // ensure no monitor was created
+        ensureNumMonitorV2s(0)
+    }
+
+    fun `test create ppl monitor with notification message source too long fails`() {
+        adminClient().updateSettings(NOTIFICATION_MESSAGE_SOURCE_MAX_LENGTH.key, 1000)
+
+        var messageTooLong = ""
+        for (i in 0 until 1001) {
+            messageTooLong += "a"
+        }
+
+        // ensure the request fails
+        try {
+            createRandomPPLMonitor(
+                randomPPLMonitor(
+                    triggers = listOf(
+                        randomPPLTrigger(
+                            actions = listOf(
+                                randomAction(
+                                    template = randomTemplateScript(
+                                        source = messageTooLong
+                                    ),
+                                    subjectTemplate = randomTemplateScript(
+                                        source = "some subject"
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            fail("Expected request to fail with BAD_REQUEST but it succeeded")
+        } catch (e: ResponseException) {
+            assertEquals("Unexpected status", RestStatus.BAD_REQUEST, e.response.restStatus())
+        }
+
+        // ensure no monitor was created
+        ensureNumMonitorV2s(0)
+    }
+
+    fun `test get ppl monitor with invalid monitor ID length`() {
+        val badId = UUIDs.base64UUID() + "extra"
+        try {
+            client().makeRequest("GET", "$MONITOR_V2_BASE_URI/$badId")
+            fail("Expected request to fail with BAD_REQUEST but it succeeded")
+        } catch (e: ResponseException) {
+            assertEquals("Unexpected status", RestStatus.BAD_REQUEST, e.response.restStatus())
+        }
+    }
+
     fun `test update nonexistent ppl monitor fails`() {
         // the random monitor query searches index TEST_INDEX_NAME,
         // so we need to create that first to ensure at least the request body is valid
@@ -366,7 +477,6 @@ class MonitorV2RestApiIT : AlertingRestTestCase() {
             client().makeRequest("PUT", "$MONITOR_V2_BASE_URI/$randomId", emptyMap(), monitorV2.toHttpEntity())
             fail("Expected request to fail with NOT_FOUND but it succeeded")
         } catch (e: ResponseException) {
-            logger.info("response: ${e.response}")
             assertEquals("Unexpected status", RestStatus.NOT_FOUND, e.response.restStatus())
         }
     }
@@ -378,79 +488,25 @@ class MonitorV2RestApiIT : AlertingRestTestCase() {
             client().makeRequest("DELETE", "$MONITOR_V2_BASE_URI/$randomId")
             fail("Expected request to fail with NOT_FOUND but it succeeded")
         } catch (e: ResponseException) {
-            logger.info("response: ${e.response}")
             assertEquals("Unexpected status", RestStatus.NOT_FOUND, e.response.restStatus())
         }
     }
 
-    /* Alerting V1 V2 Coexistence */
+    fun `test monitor stats v1 and v2 only return stats for their respective monitors`() {
+        enableScheduledJob()
 
-    /* Utils */
-    private fun assertPplMonitorsEqual(pplMonitor1: PPLMonitor, pplMonitor2: PPLMonitor) {
-        assertEquals("Monitor enabled fields not equal", pplMonitor1.enabled, pplMonitor2.enabled)
-        assertEquals("Monitor schedules not equal", pplMonitor1.schedule, pplMonitor2.schedule)
-        assertEquals("Monitor lookback windows not equal", pplMonitor1.lookBackWindow, pplMonitor2.lookBackWindow)
-        assertEquals("Monitor timestamp fields not equal", pplMonitor1.timestampField, pplMonitor2.timestampField)
-        assertEquals("Monitor query languages not equal", pplMonitor1.queryLanguage, pplMonitor2.queryLanguage)
-        assertEquals("Monitor queries not equal", pplMonitor1.query, pplMonitor2.query)
-        assertEquals("Number of triggers in monitor not equal", pplMonitor1.triggers.size, pplMonitor2.triggers.size)
+        val monitorV1Id = createMonitor(randomQueryLevelMonitor(enabled = true)).id
+        val monitorV2Id = createRandomPPLMonitor(randomPPLMonitor(enabled = true)).id
 
-        val sortedTriggers1 = pplMonitor1.triggers.sortedBy { it.id }
-        val sortedTriggers2 = pplMonitor2.triggers.sortedBy { it.id }
-        for (i in sortedTriggers1.indices) {
-            assertEquals(
-                "Monitor trigger IDs not equal",
-                sortedTriggers1[i].id,
-                sortedTriggers2[i].id
-            )
+        val statsV1Response = getAlertingStats()
+        val statsV2Response = getAlertingV2Stats()
 
-            val id = sortedTriggers1[i].id
+        logger.info("v1 stats: $statsV1Response")
+        logger.info("v2 stats: $statsV2Response")
 
-            assertEquals(
-                "Monitor trigger $id names not equal",
-                sortedTriggers1[i].name,
-                sortedTriggers2[i].name
-            )
-            assertEquals(
-                "Monitor trigger $id severities not equal",
-                sortedTriggers1[i].severity,
-                sortedTriggers2[i].severity
-            )
-            assertEquals(
-                "Monitor trigger $id throttle durations not equal",
-                sortedTriggers1[i].throttleDuration,
-                sortedTriggers2[i].throttleDuration
-            )
-            assertEquals(
-                "Monitor trigger $id expire durations not equal",
-                sortedTriggers1[i].expireDuration,
-                sortedTriggers2[i].expireDuration
-            )
-            assertEquals(
-                "Monitor trigger $id modes not equal",
-                sortedTriggers1[i].mode,
-                sortedTriggers2[i].mode
-            )
-            assertEquals(
-                "Monitor trigger $id condition types not equal",
-                sortedTriggers1[i].conditionType,
-                sortedTriggers2[i].conditionType
-            )
-            assertEquals(
-                "Monitor trigger $id number_of_results conditions not equal",
-                sortedTriggers1[i].numResultsCondition,
-                sortedTriggers2[i].numResultsCondition
-            )
-            assertEquals(
-                "Monitor trigger $id number_of_results values not equal",
-                sortedTriggers1[i].numResultsValue,
-                sortedTriggers2[i].numResultsValue
-            )
-            assertEquals(
-                "Monitor trigger $id custom conditions not equal",
-                sortedTriggers1[i].customCondition,
-                sortedTriggers2[i].customCondition
-            )
-        }
+        assertTrue("V1 stats does not contain V1 Monitor", isMonitorScheduled(monitorV1Id, statsV1Response))
+        assertTrue("V2 stats does not contain V2 Monitor", isMonitorScheduled(monitorV2Id, statsV2Response))
+        assertFalse("V2 stats contains V1 Monitor", isMonitorScheduled(monitorV1Id, statsV2Response))
+        assertFalse("V1 stats contains V2 Monitor", isMonitorScheduled(monitorV2Id, statsV1Response))
     }
 }

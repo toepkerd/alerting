@@ -8,17 +8,18 @@ package org.opensearch.alerting
 import junit.framework.TestCase.assertNull
 import org.apache.hc.core5.http.Header
 import org.apache.hc.core5.http.HttpEntity
-import org.opensearch.alerting.core.modelv2.PPLMonitor
-import org.opensearch.alerting.core.modelv2.PPLMonitor.QueryLanguage
-import org.opensearch.alerting.core.modelv2.PPLTrigger
-import org.opensearch.alerting.core.modelv2.PPLTrigger.ConditionType
-import org.opensearch.alerting.core.modelv2.PPLTrigger.NumResultsCondition
-import org.opensearch.alerting.core.modelv2.PPLTrigger.TriggerMode
-import org.opensearch.alerting.core.modelv2.TriggerV2.Severity
 import org.opensearch.alerting.model.AlertContext
 import org.opensearch.alerting.model.destination.email.EmailAccount
 import org.opensearch.alerting.model.destination.email.EmailEntry
 import org.opensearch.alerting.model.destination.email.EmailGroup
+import org.opensearch.alerting.modelv2.AlertV2
+import org.opensearch.alerting.modelv2.PPLMonitor
+import org.opensearch.alerting.modelv2.PPLMonitor.QueryLanguage
+import org.opensearch.alerting.modelv2.PPLTrigger
+import org.opensearch.alerting.modelv2.PPLTrigger.ConditionType
+import org.opensearch.alerting.modelv2.PPLTrigger.NumResultsCondition
+import org.opensearch.alerting.modelv2.PPLTrigger.TriggerMode
+import org.opensearch.alerting.modelv2.TriggerV2.Severity
 import org.opensearch.alerting.util.getBucketKeysHash
 import org.opensearch.client.Request
 import org.opensearch.client.RequestOptions
@@ -27,7 +28,6 @@ import org.opensearch.client.RestClient
 import org.opensearch.client.WarningsHandler
 import org.opensearch.common.UUIDs
 import org.opensearch.common.settings.Settings
-import org.opensearch.common.unit.TimeValue
 import org.opensearch.common.xcontent.LoggingDeprecationHandler
 import org.opensearch.common.xcontent.XContentFactory
 import org.opensearch.common.xcontent.XContentType
@@ -89,9 +89,9 @@ import org.opensearch.test.OpenSearchTestCase.randomInt
 import org.opensearch.test.OpenSearchTestCase.randomIntBetween
 import org.opensearch.test.OpenSearchTestCase.randomLongBetween
 import org.opensearch.test.rest.OpenSearchRestTestCase
+import org.opensearch.test.rest.OpenSearchRestTestCase.assertEquals
 import java.time.Instant
 import java.time.temporal.ChronoUnit
-import java.util.concurrent.TimeUnit
 
 // constants for PPL Alerting tests
 const val TIMESTAMP_FIELD = "timestamp"
@@ -496,11 +496,6 @@ val TEST_HR_BACKEND_ROLE = "HR"
 // Removing the escape slash in the request causes the security API role request to fail with parsing exception.
 val TERM_DLS_QUERY = """{\"term\": { \"accessible\": true}}"""
 
-fun randomTimeValue(
-    unit: TimeUnit = setOf(TimeUnit.MINUTES, TimeUnit.HOURS, TimeUnit.DAYS).random(),
-    value: Long = if (unit == TimeUnit.DAYS) randomLongBetween(1, 5) else randomLongBetween(1, 23)
-): TimeValue = TimeValue(value, unit)
-
 fun randomTemplateScript(
     source: String,
     params: Map<String, String> = emptyMap()
@@ -509,10 +504,11 @@ fun randomTemplateScript(
 fun randomAction(
     name: String = OpenSearchRestTestCase.randomUnicodeOfLength(10),
     template: Script = randomTemplateScript("Hello World"),
+    subjectTemplate: Script = template,
     destinationId: String = "",
     throttleEnabled: Boolean = false,
     throttle: Throttle = randomThrottle()
-) = Action(name, destinationId, template, template, throttleEnabled, throttle, actionExecutionPolicy = null)
+) = Action(name, destinationId, subjectTemplate, template, throttleEnabled, throttle, actionExecutionPolicy = null)
 
 fun randomActionWithPolicy(
     name: String = OpenSearchRestTestCase.randomUnicodeOfLength(10),
@@ -554,6 +550,62 @@ fun randomAlert(monitor: Monitor = randomQueryLevelMonitor()): Alert {
     return Alert(
         monitor, trigger, Instant.now().truncatedTo(ChronoUnit.MILLIS), null,
         actionExecutionResults = actionExecutionResults
+    )
+}
+
+/*
+val id: String = NO_ID,
+val version: Long = NO_VERSION,
+val schemaVersion: Int = NO_SCHEMA_VERSION,
+val monitorId: String,
+val monitorName: String,
+val monitorVersion: Long,
+val monitorUser: User?,
+val triggerId: String,
+val triggerName: String,
+val query: String,
+val queryResults: Map<String, Any>,
+val triggeredTime: Instant,
+val expirationTime: Instant,
+val errorMessage: String? = null,
+val severity: Severity,
+val executionId: String? = null
+ */
+fun randomAlertV2(
+    id: String = UUIDs.base64UUID(),
+    version: Long = randomLongBetween(1, 10),
+    schemaVersion: Int = randomIntBetween(1, 10),
+    monitorId: String = UUIDs.base64UUID(),
+    monitorName: String = UUIDs.base64UUID(),
+    monitorVersion: Long = randomLongBetween(1, 10),
+    monitorUser: User? = randomUser(),
+    triggerId: String = UUIDs.base64UUID(),
+    triggerName: String = UUIDs.base64UUID(),
+    query: String = "source = $TEST_INDEX_NAME | head 10",
+    queryResults: Map<String, Any> = mapOf(),
+    triggeredTime: Instant = Instant.now().truncatedTo(ChronoUnit.MILLIS),
+    expirationTime: Instant = Instant.now().truncatedTo(ChronoUnit.MILLIS),
+    errorMessage: String? = "sample error message",
+    severity: Severity = Severity.entries.random(),
+    executionId: String? = UUIDs.base64UUID()
+): AlertV2 {
+    return AlertV2(
+        id = id,
+        version = version,
+        schemaVersion = schemaVersion,
+        monitorId = monitorId,
+        monitorName = monitorName,
+        monitorVersion = monitorVersion,
+        monitorUser = monitorUser,
+        triggerId = triggerId,
+        triggerName = triggerName,
+        query = query,
+        queryResults = queryResults,
+        triggeredTime = triggeredTime,
+        expirationTime = expirationTime,
+        errorMessage = errorMessage,
+        severity = severity,
+        executionId = executionId,
     )
 }
 
@@ -894,4 +946,167 @@ fun randomAlertContext(
 /** helper that returns a field in a json map whose values are all json objects */
 fun Map<String, Any>.objectMap(key: String): Map<String, Map<String, Any>> {
     return this[key] as Map<String, Map<String, Any>>
+}
+
+fun assertPplMonitorsEqual(pplMonitor1: PPLMonitor, pplMonitor2: PPLMonitor) {
+    // note: Get and Search Monitor responses do not include User information by
+    // design, so that check is skipped
+
+    // note: Update Monitor API intentionally overrides the enabledTime of the new given monitor
+    // with the enabledTime of the existing monitor being updated to ensure execution correctness,
+    // so that check is skipped
+
+    assertEquals("Monitor enabled fields not equal", pplMonitor1.enabled, pplMonitor2.enabled)
+    assertEquals("Monitor schedules not equal", pplMonitor1.schedule, pplMonitor2.schedule)
+    assertEquals("Monitor lookback windows not equal", pplMonitor1.lookBackWindow, pplMonitor2.lookBackWindow)
+    assertEquals("Monitor timestamp fields not equal", pplMonitor1.timestampField, pplMonitor2.timestampField)
+    assertEquals("Monitor last updated times are not equal", pplMonitor1.lastUpdateTime, pplMonitor2.lastUpdateTime)
+    assertEquals("Monitor query languages not equal", pplMonitor1.queryLanguage, pplMonitor2.queryLanguage)
+    assertEquals("Monitor queries not equal", pplMonitor1.query, pplMonitor2.query)
+    assertEquals("Number of triggers in monitor not equal", pplMonitor1.triggers.size, pplMonitor2.triggers.size)
+
+    val sortedTriggers1 = pplMonitor1.triggers.sortedBy { it.id }
+    val sortedTriggers2 = pplMonitor2.triggers.sortedBy { it.id }
+    for (i in sortedTriggers1.indices) {
+        assertPplTriggersEqual(sortedTriggers1[i], sortedTriggers2[i])
+    }
+}
+
+fun assertPplTriggersEqual(pplTrigger1: PPLTrigger, pplTrigger2: PPLTrigger) {
+    assertEquals(
+        "Monitor trigger IDs not equal",
+        pplTrigger1.id,
+        pplTrigger2.id
+    )
+
+    val id = pplTrigger1.id
+
+    assertEquals(
+        "Monitor trigger $id names not equal",
+        pplTrigger1.name,
+        pplTrigger2.name
+    )
+    assertEquals(
+        "Monitor trigger $id severities not equal",
+        pplTrigger1.severity,
+        pplTrigger2.severity
+    )
+    assertEquals(
+        "Monitor trigger $id throttle durations not equal",
+        pplTrigger1.throttleDuration,
+        pplTrigger2.throttleDuration
+    )
+    assertEquals(
+        "Monitor trigger $id expire durations not equal",
+        pplTrigger1.expireDuration,
+        pplTrigger2.expireDuration
+    )
+    assertEquals(
+        "Monitor trigger $id modes not equal",
+        pplTrigger1.mode,
+        pplTrigger2.mode
+    )
+    assertEquals(
+        "Monitor trigger $id condition types not equal",
+        pplTrigger1.conditionType,
+        pplTrigger2.conditionType
+    )
+    assertEquals(
+        "Monitor trigger $id number_of_results conditions not equal",
+        pplTrigger1.numResultsCondition,
+        pplTrigger2.numResultsCondition
+    )
+    assertEquals(
+        "Monitor trigger $id number_of_results values not equal",
+        pplTrigger1.numResultsValue,
+        pplTrigger2.numResultsValue
+    )
+    assertEquals(
+        "Monitor trigger $id custom conditions not equal",
+        pplTrigger1.customCondition,
+        pplTrigger2.customCondition
+    )
+}
+
+fun assertAlertV2sEqual(alert1: AlertV2, alert2: AlertV2) {
+    assertEquals(
+        "AlertV2 IDs are not equal",
+        alert1.id,
+        alert2.id
+    )
+    assertEquals(
+        "AlertV2 versions are not equal",
+        alert1.version,
+        alert2.version
+    )
+    assertEquals(
+        "AlertV2 schema versions are not equal",
+        alert1.schemaVersion,
+        alert2.schemaVersion
+    )
+    assertEquals(
+        "AlertV2 monitor IDs are not equal",
+        alert1.monitorId,
+        alert2.monitorId
+    )
+    assertEquals(
+        "AlertV2 monitor names are not equal",
+        alert1.monitorName,
+        alert2.monitorName
+    )
+    assertEquals(
+        "AlertV2 monitor versions are not equal",
+        alert1.monitorVersion,
+        alert2.monitorVersion
+    )
+    assertEquals(
+        "AlertV2 monitor users are not equal",
+        alert1.monitorUser.toString(),
+        alert2.monitorUser.toString()
+    )
+    assertEquals(
+        "AlertV2 trigger IDs are not equal",
+        alert1.triggerId,
+        alert2.triggerId
+    )
+    assertEquals(
+        "AlertV2 trigger names are not equal",
+        alert1.triggerName,
+        alert2.triggerName
+    )
+    assertEquals(
+        "AlertV2 queries are not equal",
+        alert1.query,
+        alert2.query
+    )
+    assertEquals(
+        "AlertV2 query results are not equal",
+        alert1.queryResults,
+        alert2.queryResults
+    )
+    assertEquals(
+        "AlertV2 triggered times are not equal",
+        alert1.triggeredTime,
+        alert2.triggeredTime
+    )
+    assertEquals(
+        "AlertV2 expiration times are not equal",
+        alert1.expirationTime,
+        alert2.expirationTime
+    )
+    assertEquals(
+        "AlertV2 error messages are not equal",
+        alert1.errorMessage,
+        alert2.errorMessage
+    )
+    assertEquals(
+        "AlertV2 severities are not equal",
+        alert1.severity,
+        alert2.severity
+    )
+    assertEquals(
+        "AlertV2 execution IDs are not equal",
+        alert1.executionId,
+        alert2.executionId
+    )
 }

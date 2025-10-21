@@ -345,6 +345,13 @@ class AlertingSettings {
             Setting.Property.NodeScope, Setting.Property.Dynamic
         )
 
+        val ALERTING_V2_MAX_LOOK_BACK_WINDOW = Setting.longSetting(
+            "plugins.alerting_v2.monitor.max_look_back_window",
+            10080L, // 7 days, 10080 minutes
+            2L,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
         val ALERTING_V2_MAX_QUERY_LENGTH = Setting.longSetting(
             "plugins.alerting_v2.monitor.max_query_length",
             2000L,
@@ -373,6 +380,20 @@ class AlertingSettings {
             "plugins.alerting_v2.per_result_trigger_max_alerts",
             10,
             1,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val NOTIFICATION_SUBJECT_SOURCE_MAX_LENGTH = Setting.intSetting(
+            "plugins.alerting_v2.notification_subject_source_max_length",
+            1000,
+            100,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        val NOTIFICATION_MESSAGE_SOURCE_MAX_LENGTH = Setting.intSetting(
+            "plugins.alerting_v2.notification_message_source_max_length",
+            3000,
+            1000,
             Setting.Property.NodeScope, Setting.Property.Dynamic
         )
     }

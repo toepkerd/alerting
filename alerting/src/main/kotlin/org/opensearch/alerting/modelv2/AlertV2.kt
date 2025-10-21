@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package org.opensearch.alerting.core.modelv2
+package org.opensearch.alerting.modelv2
 
-import org.opensearch.alerting.core.modelv2.TriggerV2.Severity
 import org.opensearch.alerting.core.util.nonOptionalTimeField
+import org.opensearch.alerting.modelv2.TriggerV2.Severity
 import org.opensearch.common.lucene.uid.Versions
 import org.opensearch.commons.alerting.util.instant
 import org.opensearch.commons.alerting.util.optionalUserField
@@ -48,7 +48,7 @@ import java.time.Instant
  * 1. AlertV2 is generated when a TriggerV2's condition is met. The TriggerV2 fires and forgets the AlertV2.
  * 2. AlertV2 is stored in the alerts index. AlertV2s are stateless. (e.g. they are never ACTIVE or COMPLETED)
  * 3. AlertV2 is soft deleted at [expirationTime], and archived in an alert history index
- * 4. Based on the alert history retention period, the AlertV2 is permanently deleted
+ * 4. Based on the alert v2 history retention period, the AlertV2 is permanently deleted
  */
 data class AlertV2(
     val id: String = NO_ID,
@@ -155,7 +155,7 @@ data class AlertV2(
             ERROR_MESSAGE_FIELD to errorMessage,
             EXECUTION_ID_FIELD to executionId,
             EXPIRATION_TIME_FIELD to expirationTime.toEpochMilli(),
-            SEVERITY_FIELD to severity
+            SEVERITY_FIELD to severity.value
         )
     }
 
@@ -227,7 +227,7 @@ data class AlertV2(
                     TriggerV2.SEVERITY_FIELD -> {
                         val input = xcp.text()
                         val enumMatchResult = Severity.enumFromString(input)
-                            ?: throw IllegalStateException(
+                            ?: throw IllegalArgumentException(
                                 "Invalid value for ${TriggerV2.SEVERITY_FIELD}: $input. " +
                                     "Supported values are ${Severity.entries.map { it.value }}"
                             )

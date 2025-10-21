@@ -20,8 +20,6 @@ import org.opensearch.alerting.AlertingPlugin.Companion.EMAIL_GROUP_BASE_URI
 import org.opensearch.alerting.AlertingPlugin.Companion.MONITOR_V2_BASE_URI
 import org.opensearch.alerting.alerts.AlertIndices
 import org.opensearch.alerting.alerts.AlertIndices.Companion.FINDING_HISTORY_WRITE_INDEX
-import org.opensearch.alerting.core.modelv2.MonitorV2
-import org.opensearch.alerting.core.modelv2.PPLMonitor
 import org.opensearch.alerting.core.settings.ScheduledJobSettings
 import org.opensearch.alerting.model.destination.Chime
 import org.opensearch.alerting.model.destination.CustomWebhook
@@ -29,6 +27,8 @@ import org.opensearch.alerting.model.destination.Destination
 import org.opensearch.alerting.model.destination.Slack
 import org.opensearch.alerting.model.destination.email.EmailAccount
 import org.opensearch.alerting.model.destination.email.EmailGroup
+import org.opensearch.alerting.modelv2.MonitorV2
+import org.opensearch.alerting.modelv2.PPLMonitor
 import org.opensearch.alerting.settings.AlertingSettings
 import org.opensearch.alerting.settings.DestinationSettings
 import org.opensearch.alerting.util.DestinationType
@@ -1567,6 +1567,12 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         return responseMap
     }
 
+    fun getAlertingV2Stats(metrics: String = ""): Map<String, Any> {
+        val monitorStatsResponse = client().makeRequest("GET", "/_plugins/_alerting/v2/stats$metrics")
+        val responseMap = createParser(XContentType.JSON.xContent(), monitorStatsResponse.entity.content).map()
+        return responseMap
+    }
+
     fun enableScheduledJob(): Response {
         val updateResponse = client().makeRequest(
             "PUT", "_cluster/settings",
@@ -2169,6 +2175,19 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         val deletedCommentId = deleteResponseBody["_id"] as String
 
         return deletedCommentId
+    }
+
+    protected fun isMonitorScheduled(monitorId: String, alertingStatsResponse: Map<String, Any>): Boolean {
+        val nodesInfo = alertingStatsResponse["nodes"] as Map<String, Any>
+        for (nodeId in nodesInfo.keys) {
+            val nodeInfo = nodesInfo[nodeId] as Map<String, Any>
+            val jobsInfo = nodeInfo["jobs_info"] as Map<String, Any>
+            if (jobsInfo.keys.contains(monitorId)) {
+                return true
+            }
+        }
+
+        return false
     }
 
     // this function is used for PPL Alerting testing.

@@ -39,17 +39,20 @@ import org.opensearch.alerting.actionv2.IndexMonitorV2Action
 import org.opensearch.alerting.actionv2.IndexMonitorV2Request
 import org.opensearch.alerting.actionv2.IndexMonitorV2Response
 import org.opensearch.alerting.core.ScheduledJobIndices
-import org.opensearch.alerting.core.modelv2.MonitorV2
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.MONITOR_V2_TYPE
-import org.opensearch.alerting.core.modelv2.PPLMonitor
-import org.opensearch.alerting.core.modelv2.PPLTrigger.ConditionType
+import org.opensearch.alerting.modelv2.MonitorV2
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.MONITOR_V2_TYPE
+import org.opensearch.alerting.modelv2.PPLMonitor
+import org.opensearch.alerting.modelv2.PPLTrigger.ConditionType
 import org.opensearch.alerting.opensearchapi.suspendUntil
 import org.opensearch.alerting.settings.AlertingSettings
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_EXPIRE_DURATION
+import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_LOOK_BACK_WINDOW
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_MONITORS
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_QUERY_LENGTH
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERTING_V2_MAX_THROTTLE_DURATION
 import org.opensearch.alerting.settings.AlertingSettings.Companion.INDEX_TIMEOUT
+import org.opensearch.alerting.settings.AlertingSettings.Companion.NOTIFICATION_MESSAGE_SOURCE_MAX_LENGTH
+import org.opensearch.alerting.settings.AlertingSettings.Companion.NOTIFICATION_SUBJECT_SOURCE_MAX_LENGTH
 import org.opensearch.alerting.settings.AlertingSettings.Companion.REQUEST_TIMEOUT
 import org.opensearch.alerting.transport.SecureTransportAction
 import org.opensearch.alerting.util.IndexUtils
@@ -100,7 +103,10 @@ class TransportIndexMonitorV2Action @Inject constructor(
     @Volatile private var maxMonitors = ALERTING_V2_MAX_MONITORS.get(settings)
     @Volatile private var maxThrottleDuration = ALERTING_V2_MAX_THROTTLE_DURATION.get(settings)
     @Volatile private var maxExpireDuration = ALERTING_V2_MAX_EXPIRE_DURATION.get(settings)
+    @Volatile private var maxLookBackWindow = ALERTING_V2_MAX_LOOK_BACK_WINDOW.get(settings)
     @Volatile private var maxQueryLength = ALERTING_V2_MAX_QUERY_LENGTH.get(settings)
+    @Volatile private var notificationSubjectMaxLength = NOTIFICATION_SUBJECT_SOURCE_MAX_LENGTH.get(settings)
+    @Volatile private var notificationMessageMaxLength = NOTIFICATION_MESSAGE_SOURCE_MAX_LENGTH.get(settings)
     @Volatile private var requestTimeout = REQUEST_TIMEOUT.get(settings)
     @Volatile private var indexTimeout = INDEX_TIMEOUT.get(settings)
     @Volatile override var filterByEnabled = AlertingSettings.FILTER_BY_BACKEND_ROLES.get(settings)
@@ -109,7 +115,14 @@ class TransportIndexMonitorV2Action @Inject constructor(
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_MONITORS) { maxMonitors = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_THROTTLE_DURATION) { maxThrottleDuration = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_EXPIRE_DURATION) { maxExpireDuration = it }
+        clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_LOOK_BACK_WINDOW) { maxLookBackWindow = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(ALERTING_V2_MAX_QUERY_LENGTH) { maxQueryLength = it }
+        clusterService.clusterSettings.addSettingsUpdateConsumer(NOTIFICATION_SUBJECT_SOURCE_MAX_LENGTH) {
+            notificationSubjectMaxLength = it
+        }
+        clusterService.clusterSettings.addSettingsUpdateConsumer(NOTIFICATION_MESSAGE_SOURCE_MAX_LENGTH) {
+            notificationMessageMaxLength = it
+        }
         clusterService.clusterSettings.addSettingsUpdateConsumer(REQUEST_TIMEOUT) { requestTimeout = it }
         clusterService.clusterSettings.addSettingsUpdateConsumer(INDEX_TIMEOUT) { indexTimeout = it }
         listenFilterBySettingChange(clusterService)
@@ -290,6 +303,30 @@ class TransportIndexMonitorV2Action @Inject constructor(
                 )
                 return false
             }
+
+            trigger.actions.forEach { action ->
+                if (action.subjectTemplate?.idOrCode?.length!! > notificationSubjectMaxLength) {
+                    validationListener.onFailure(
+                        AlertingException.wrap(
+                            IllegalArgumentException(
+                                "Notification subject source cannot exceed length: $notificationSubjectMaxLength"
+                            )
+                        )
+                    )
+                    return false
+                }
+
+                if (action.messageTemplate.idOrCode.length > notificationMessageMaxLength) {
+                    validationListener.onFailure(
+                        AlertingException.wrap(
+                            IllegalArgumentException(
+                                "Notification message source cannot exceed length: $notificationMessageMaxLength"
+                            )
+                        )
+                    )
+                    return false
+                }
+            }
         }
 
         // ensure the query length doesn't exceed the limit
@@ -302,6 +339,20 @@ class TransportIndexMonitorV2Action @Inject constructor(
                 )
             )
             return false
+        }
+
+        // ensure the look back window doesn't exceed the limit
+        pplMonitor.lookBackWindow?.let {
+            if (pplMonitor.lookBackWindow > maxLookBackWindow) {
+                validationListener.onFailure(
+                    AlertingException.wrap(
+                        IllegalArgumentException(
+                            "Look back window must be at most $maxLookBackWindow minutes but was ${pplMonitor.lookBackWindow}"
+                        )
+                    )
+                )
+                return false
+            }
         }
 
         return true
@@ -604,8 +655,8 @@ class TransportIndexMonitorV2Action @Inject constructor(
 
         var newMonitorV2 = indexMonitorRequest.monitorV2
 
-        // If both are enabled, use the current existing monitor enabled time, otherwise the next execution will be
-        // incorrect.
+        // If both are enabled, use the current existing monitor enabled time,
+        // otherwise the next execution will be incorrect.
         if (newMonitorV2.enabled && existingMonitorV2.enabled) {
             newMonitorV2 = newMonitorV2.makeCopy(enabledTime = existingMonitorV2.enabledTime)
         }

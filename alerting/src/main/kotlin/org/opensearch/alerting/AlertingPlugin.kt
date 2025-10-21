@@ -31,12 +31,12 @@ import org.opensearch.alerting.core.ScheduledJobIndices
 import org.opensearch.alerting.core.action.node.ScheduledJobsStatsAction
 import org.opensearch.alerting.core.action.node.ScheduledJobsStatsTransportAction
 import org.opensearch.alerting.core.lock.LockService
-import org.opensearch.alerting.core.modelv2.MonitorV2
 import org.opensearch.alerting.core.resthandler.RestScheduledJobStatsHandler
 import org.opensearch.alerting.core.resthandler.RestScheduledJobStatsV2Handler
 import org.opensearch.alerting.core.schedule.JobScheduler
 import org.opensearch.alerting.core.settings.LegacyOpenDistroScheduledJobSettings
 import org.opensearch.alerting.core.settings.ScheduledJobSettings
+import org.opensearch.alerting.modelv2.MonitorV2
 import org.opensearch.alerting.remote.monitors.RemoteMonitorRegistry
 import org.opensearch.alerting.resthandler.RestAcknowledgeAlertAction
 import org.opensearch.alerting.resthandler.RestAcknowledgeChainedAlertAction
@@ -489,10 +489,13 @@ internal class AlertingPlugin : PainlessExtension, ActionPlugin, ScriptPlugin, R
             AlertingSettings.ALERTING_V2_MAX_MONITORS,
             AlertingSettings.ALERTING_V2_MAX_THROTTLE_DURATION,
             AlertingSettings.ALERTING_V2_MAX_EXPIRE_DURATION,
+            AlertingSettings.ALERTING_V2_MAX_LOOK_BACK_WINDOW,
             AlertingSettings.ALERTING_V2_MAX_QUERY_LENGTH,
             AlertingSettings.ALERT_V2_QUERY_RESULTS_MAX_DATAROWS,
             AlertingSettings.ALERT_V2_QUERY_RESULTS_MAX_SIZE,
-            AlertingSettings.ALERT_V2_PER_RESULT_TRIGGER_MAX_ALERTS
+            AlertingSettings.ALERT_V2_PER_RESULT_TRIGGER_MAX_ALERTS,
+            AlertingSettings.NOTIFICATION_SUBJECT_SOURCE_MAX_LENGTH,
+            AlertingSettings.NOTIFICATION_MESSAGE_SOURCE_MAX_LENGTH
         )
     }
 

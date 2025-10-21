@@ -3,22 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package org.opensearch.alerting.core.modelv2
+package org.opensearch.alerting.modelv2
 
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.ENABLED_FIELD
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.ENABLED_TIME_FIELD
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.LAST_UPDATE_TIME_FIELD
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.LOOK_BACK_WINDOW_FIELD
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.MONITOR_V2_MAX_TRIGGERS
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NAME_FIELD
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NO_ID
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.NO_VERSION
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.SCHEDULE_FIELD
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.SCHEMA_VERSION_FIELD
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.TIMESTAMP_FIELD
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.TRIGGERS_FIELD
-import org.opensearch.alerting.core.modelv2.MonitorV2.Companion.USER_FIELD
 import org.opensearch.alerting.core.util.nonOptionalTimeField
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.ALERTING_V2_MAX_NAME_LENGTH
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.ENABLED_FIELD
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.ENABLED_TIME_FIELD
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.LAST_UPDATE_TIME_FIELD
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.LOOK_BACK_WINDOW_FIELD
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.MONITOR_V2_MAX_TRIGGERS
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.MONITOR_V2_MIN_LOOK_BACK_WINDOW
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.NAME_FIELD
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.NO_ID
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.NO_VERSION
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.SCHEDULE_FIELD
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.SCHEMA_VERSION_FIELD
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.TIMESTAMP_FIELD
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.TRIGGERS_FIELD
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.USER_FIELD
 import org.opensearch.commons.alerting.model.CronSchedule
 import org.opensearch.commons.alerting.model.Schedule
 import org.opensearch.commons.alerting.util.AlertingException
@@ -82,23 +84,40 @@ data class PPLMonitor(
 
     init {
         // SQL monitors are not yet supported
-        if (this.queryLanguage == QueryLanguage.SQL) {
-            throw IllegalStateException("Monitors with SQL queries are not supported")
+        if (queryLanguage == QueryLanguage.SQL) {
+            throw IllegalArgumentException("SQL queries are not supported. Please use a PPL query.")
+        }
+
+        require(this.name.length <= ALERTING_V2_MAX_NAME_LENGTH) {
+            "Monitor name too long, length must be less than $ALERTING_V2_MAX_NAME_LENGTH"
+        }
+
+        if (lookBackWindow != null) {
+            requireNotNull(timestampField) { "If look back window is specified, timestamp field must not be null" }
+        } else {
+            require(timestampField == null) { "If look back window is not specified, timestamp field must not be specified" }
+        }
+
+        require(triggers.isNotEmpty()) { "Monitor must include at least 1 trigger" }
+        require(this.triggers.size <= MONITOR_V2_MAX_TRIGGERS) { "Monitors can only have $MONITOR_V2_MAX_TRIGGERS triggers" }
+
+        lookBackWindow?.let {
+            require(this.lookBackWindow >= MONITOR_V2_MIN_LOOK_BACK_WINDOW) {
+                "Monitors look back windows must be at least $MONITOR_V2_MIN_LOOK_BACK_WINDOW minute"
+            }
         }
 
         // for checking trigger ID uniqueness
         val triggerIds = mutableSetOf<String>()
-        triggers.forEach { trigger ->
+        this.triggers.forEach { trigger ->
             require(triggerIds.add(trigger.id)) { "Duplicate trigger id: ${trigger.id}. Trigger ids must be unique." }
         }
 
-        if (enabled) {
-            requireNotNull(enabledTime)
+        if (this.enabled) {
+            requireNotNull(this.enabledTime)
         } else {
-            require(enabledTime == null)
+            require(this.enabledTime == null)
         }
-
-        require(triggers.size <= MONITOR_V2_MAX_TRIGGERS) { "Monitors can only have $MONITOR_V2_MAX_TRIGGERS triggers" }
     }
 
     @Throws(IOException::class)
@@ -117,7 +136,7 @@ data class PPLMonitor(
         } else {
             null
         },
-        triggers = sin.readList(PPLTrigger::readFrom),
+        triggers = sin.readList(PPLTrigger.Companion::readFrom),
         schemaVersion = sin.readInt(),
         queryLanguage = sin.readEnum(QueryLanguage::class.java),
         query = sin.readString()
@@ -179,11 +198,13 @@ data class PPLMonitor(
         out.writeLong(version)
         out.writeString(name)
         out.writeBoolean(enabled)
+
         if (schedule is CronSchedule) {
             out.writeEnum(Schedule.TYPE.CRON)
         } else {
             out.writeEnum(Schedule.TYPE.INTERVAL)
         }
+        schedule.writeTo(out)
 
         out.writeOptionalLong(lookBackWindow)
         out.writeOptionalString(timestampField)
@@ -210,8 +231,6 @@ data class PPLMonitor(
             LOOK_BACK_WINDOW_FIELD to lookBackWindow,
             LAST_UPDATE_TIME_FIELD to lastUpdateTime.toEpochMilli(),
             ENABLED_TIME_FIELD to enabledTime?.toEpochMilli(),
-            TRIGGERS_FIELD to triggers,
-            QUERY_LANGUAGE_FIELD to queryLanguage.value,
             QUERY_FIELD to query
         )
     }
@@ -330,11 +349,6 @@ data class PPLMonitor(
 
             /* validations */
 
-            // ensure there's at least 1 trigger
-            if (triggers.isEmpty()) {
-                throw IllegalArgumentException("Monitor must include at least 1 trigger")
-            }
-
             // if enabled, set time of MonitorV2 creation/update is set as enable time
             if (enabled && enabledTime == null) {
                 enabledTime = Instant.now()
@@ -349,15 +363,6 @@ data class PPLMonitor(
             requireNotNull(schedule) { "Schedule is null" }
             requireNotNull(query) { "Query is null" }
             requireNotNull(lastUpdateTime) { "Last update time is null" }
-            if (lookBackWindow != null) {
-                requireNotNull(timestampField) { "If look back window is specified, timestamp field must not be null" }
-            } else {
-                require(timestampField == null) { "If look back window is not specified, timestamp field must not be specified" }
-            }
-
-            if (queryLanguage == QueryLanguage.SQL) {
-                throw IllegalArgumentException("SQL queries are not supported. Please use a PPL query.")
-            }
 
             /* return PPLMonitor */
             return PPLMonitor(
