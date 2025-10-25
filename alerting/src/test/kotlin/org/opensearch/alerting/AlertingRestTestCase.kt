@@ -1716,31 +1716,6 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         client().performRequest(request)
     }
 
-    fun createAdminLevelCustomIndexRole(name: String, index: String) {
-        val request = Request("PUT", "/_plugins/_security/api/roles/$name")
-        var entity = "{\n" +
-            "\"cluster_permissions\": [\n" +
-            "\"*\"\n" +
-            "],\n" +
-            "\"index_permissions\": [\n" +
-            "{\n" +
-            "\"index_patterns\": [\n" +
-            "\"$index\"\n" +
-            "],\n" +
-            "\"dls\": \"\",\n" +
-            "\"fls\": [],\n" +
-            "\"masked_fields\": [],\n" +
-            "\"allowed_actions\": [\n" +
-            "\"*\"\n" +
-            "]\n" +
-            "}\n" +
-            "],\n" +
-            "\"tenant_permissions\": []\n" +
-            "}"
-        request.setJsonEntity(entity)
-        client().performRequest(request)
-    }
-
     private fun createCustomIndexRole(name: String, index: String, clusterPermissions: List<String?>) {
         val request = Request("PUT", "/_plugins/_security/api/roles/$name")
 
@@ -1889,25 +1864,6 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         createUser(user, backendRoles.toTypedArray())
         createTestIndex(index)
         createCustomIndexRole(role, index, clusterPermissions)
-        createUserRolesMapping(role, arrayOf(user))
-    }
-
-    // creates a user mapped to a custom role that has full opensearch access,
-    // and optionally, limited access to specific indices.
-    // because this user is not explicitly mapped to all_access, this
-    // user won't technically be an admin user. this means they don't
-    // bypass RBAC checks, and will honor filter by if enabled even
-    // though they have full, admin-level access to opensearch. this
-    // creates a user for tests that put opensearch security actions
-    // mappings out of scope, and only want to test RBAC filtering
-    fun createUserWithAdminLevelCustomRole(
-        user: String,
-        backendRoles: List<String>,
-        role: String,
-        index: String = "*"
-    ) {
-        createUser(user, backendRoles.toTypedArray())
-        createAdminLevelCustomIndexRole(role, index)
         createUserRolesMapping(role, arrayOf(user))
     }
 

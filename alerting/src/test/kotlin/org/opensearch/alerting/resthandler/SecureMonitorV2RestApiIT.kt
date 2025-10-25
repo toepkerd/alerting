@@ -12,8 +12,12 @@ import org.apache.hc.core5.http.message.BasicHeader
 import org.junit.After
 import org.junit.Before
 import org.junit.BeforeClass
+import org.opensearch.alerting.ALERTING_FULL_ACCESS_ROLE
+import org.opensearch.alerting.ALL_ACCESS_ROLE
 import org.opensearch.alerting.AlertingPlugin.Companion.MONITOR_V2_BASE_URI
 import org.opensearch.alerting.AlertingRestTestCase
+import org.opensearch.alerting.PPL_FULL_ACCESS_ROLE
+import org.opensearch.alerting.TEST_INDEX_NAME
 import org.opensearch.alerting.makeRequest
 import org.opensearch.alerting.randomPPLMonitor
 import org.opensearch.client.ResponseException
@@ -62,24 +66,51 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         deleteUser(user)
     }
 
+    fun `test create monitor as user without alerting access fails`() {
+        if (!isHttps()) {
+            return
+        }
+
+        val pplMonitorConfig = randomPPLMonitor()
+
+        createUserWithTestDataAndCustomRole(
+            user,
+            TEST_INDEX_NAME,
+            "custom_role",
+            listOf(),
+            null
+        )
+
+        try {
+            createMonitorV2WithClient(
+                userClient!!,
+                monitorV2 = pplMonitorConfig
+            )
+            fail("Expected create monitor to fail as user does not have permissions to call alerting APIs")
+        } catch (e: ResponseException) {
+            assertEquals("Unexpected error status", RestStatus.FORBIDDEN.status, e.response.statusLine.statusCode)
+        }
+
+        ensureNumMonitorV2s(0)
+    }
+
     fun `test create monitor that queries index user doesn't have access to fails`() {
         if (!isHttps()) {
             return
         }
 
         createIndex("some_index", Settings.EMPTY)
-        createIndex("other_index", Settings.EMPTY)
 
         val pplMonitorConfig = randomPPLMonitor(
             query = "source = some_index | head 10"
         )
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithTestDataAndCustomRole(
             user,
+            "other_index",
+            "custom_role",
             listOf(),
-            userCustomRole,
-            "other_index"
+            getClusterPermissionsFromCustomRole(ALL_ACCESS_ROLE)
         )
 
         try {
@@ -103,11 +134,11 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
 
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         createMonitorV2WithClient(userClient!!, monitorV2 = pplMonitorConfig, listOf("backend_role_a"))
@@ -123,11 +154,11 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
 
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         try {
@@ -151,25 +182,26 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         val pplMonitor = createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
         // getUser should have access to the monitor above created by user
-        val getUser = "getUser"
-        val getUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
-            getUser,
+        val updateUser = "updateUser"
+
+        createUserWithRoles(
+            updateUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a"),
-            getUserCustomRole
+            true
         )
 
-        val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), getUser, password)
+        val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), updateUser, password)
             .setSocketTimeout(60000)
             .setConnectionRequestTimeout(180000)
             .build()
@@ -194,25 +226,26 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         val pplMonitor = createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
-        // getUser should have access to the monitor above created by user
-        val getUser = "getUser"
-        val getUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
-            getUser,
+        // updateUser should have access to the monitor above created by user
+        val updateUser = "updateUser"
+
+        createUserWithRoles(
+            updateUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_c"),
-            getUserCustomRole
+            true
         )
 
-        val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), getUser, password)
+        val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), updateUser, password)
             .setSocketTimeout(60000)
             .setConnectionRequestTimeout(180000)
             .build()
@@ -242,22 +275,23 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         val pplMonitor = createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
         // getUser should have access to the monitor above created by user
         val getUser = "getUser"
-        val getUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
+
+        createUserWithRoles(
             getUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a"),
-            getUserCustomRole
+            true
         )
 
         val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), getUser, password)
@@ -284,22 +318,23 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         val pplMonitor = createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
         // getUser should not have access to the monitor above created by user
         val getUser = "getUser"
-        val getUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
+
+        createUserWithRoles(
             getUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_c"),
-            getUserCustomRole
+            true
         )
 
         val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), getUser, password)
@@ -329,22 +364,23 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
         // getUser should have access to the monitor above created by user
         val searchUser = "searchUser"
-        val searchUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
+
+        createUserWithRoles(
             searchUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a"),
-            searchUserCustomRole
+            true
         )
 
         val searchUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), searchUser, password)
@@ -379,31 +415,32 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
         // getUser should have access to the monitor above created by user
         val searchUser = "searchUser"
-        val getUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
+
+        createUserWithRoles(
             searchUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_c"),
-            getUserCustomRole
+            true
         )
 
-        val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), searchUser, password)
+        val searchUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), searchUser, password)
             .setSocketTimeout(60000)
             .setConnectionRequestTimeout(180000)
             .build()
 
         val search = SearchSourceBuilder().query(QueryBuilders.matchAllQuery()).toString()
-        val searchMonitorResponse = getUserClient!!.makeRequest(
+        val searchMonitorResponse = searchUserClient!!.makeRequest(
             "POST",
             "$MONITOR_V2_BASE_URI/_search",
             StringEntity(search, ContentType.APPLICATION_JSON),
@@ -418,7 +455,7 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
 
         // cleanup
-        getUserClient.close()
+        searchUserClient.close()
     }
 
     fun `test RBAC execute monitorV2 as user with correct backend roles succeeds`() {
@@ -428,22 +465,23 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         val pplMonitor = createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
         // getUser should have access to the monitor above created by user
         val executeUser = "executeUser"
-        val executeUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
+
+        createUserWithRoles(
             executeUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a"),
-            executeUserCustomRole
+            true
         )
 
         val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), executeUser, password)
@@ -470,22 +508,23 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         val pplMonitor = createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
         // getUser should not have access to the monitor above created by user
         val executeUser = "executeUser"
-        val executeUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
+
+        createUserWithRoles(
             executeUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_c"),
-            executeUserCustomRole
+            true
         )
 
         val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), executeUser, password)
@@ -515,30 +554,31 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         val pplMonitor = createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
         // getUser should have access to the monitor above created by user
         val deleteUser = "deleteUser"
-        val deleteUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
+
+        createUserWithRoles(
             deleteUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a"),
-            deleteUserCustomRole
+            true
         )
 
-        val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), deleteUser, password)
+        val deleteUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), deleteUser, password)
             .setSocketTimeout(60000)
             .setConnectionRequestTimeout(180000)
             .build()
 
-        val getMonitorResponse = getUserClient!!.makeRequest(
+        val getMonitorResponse = deleteUserClient!!.makeRequest(
             "DELETE",
             "$MONITOR_V2_BASE_URI/${pplMonitor.id}",
             null,
@@ -549,7 +589,7 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         ensureNumMonitorV2s(0)
 
         // cleanup
-        getUserClient.close()
+        deleteUserClient.close()
     }
 
     fun `test RBAC delete monitorV2 as user without correct backend roles fails`() {
@@ -559,31 +599,32 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         }
         val pplMonitorConfig = randomPPLMonitor(enabled = true)
 
-        val userCustomRole = "custom_role_1"
-        createUserWithAdminLevelCustomRole(
+        createUserWithRoles(
             user,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_a", "backend_role_b"),
-            userCustomRole
+            false
         )
 
         val pplMonitor = createMonitorV2WithClient(userClient!!, pplMonitorConfig, listOf("backend_role_a", "backend_role_b"))
 
         // getUser should not have access to the monitor above created by user
         val deleteUser = "deleteUser"
-        val deleteUserCustomRole = "custom_role_2" // different role from the one created before to avoid conflicts
-        createUserWithAdminLevelCustomRole(
+
+        createUserWithRoles(
             deleteUser,
+            listOf(ALERTING_FULL_ACCESS_ROLE, PPL_FULL_ACCESS_ROLE),
             listOf("backend_role_c"),
-            deleteUserCustomRole
+            true
         )
 
-        val getUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), deleteUser, password)
+        val deleteUserClient = SecureRestClientBuilder(clusterHosts.toTypedArray(), isHttps(), deleteUser, password)
             .setSocketTimeout(60000)
             .setConnectionRequestTimeout(180000)
             .build()
 
         try {
-            getUserClient!!.makeRequest(
+            deleteUserClient!!.makeRequest(
                 "DELETE",
                 "$MONITOR_V2_BASE_URI/${pplMonitor.id}",
                 null,
@@ -593,7 +634,7 @@ class SecureMonitorV2RestApiIT : AlertingRestTestCase() {
         } catch (e: ResponseException) {
             assertEquals("Unexpected delete monitor status", RestStatus.FORBIDDEN.status, e.response.statusLine.statusCode)
         } finally {
-            getUserClient?.close()
+            deleteUserClient?.close()
         }
 
         ensureNumMonitorV2s(1)
