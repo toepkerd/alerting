@@ -15,10 +15,14 @@ import org.opensearch.action.bulk.BulkRequest
 import org.opensearch.action.bulk.BulkResponse
 import org.opensearch.action.index.IndexRequest
 import org.opensearch.action.support.WriteRequest
+import org.opensearch.alerting.AlertingV2Utils.appendCustomCondition
+import org.opensearch.alerting.AlertingV2Utils.appendDataRowsLimit
 import org.opensearch.alerting.AlertingV2Utils.capPplQueryResultsSize
+import org.opensearch.alerting.AlertingV2Utils.executePplQuery
+import org.opensearch.alerting.AlertingV2Utils.findEvalResultVar
+import org.opensearch.alerting.AlertingV2Utils.findEvalResultVarIdxInSchema
 import org.opensearch.alerting.QueryLevelMonitorRunner.getConfigAndSendNotification
 import org.opensearch.alerting.alertsv2.AlertV2Indices
-import org.opensearch.alerting.core.ppl.PPLPluginInterface
 import org.opensearch.alerting.modelv2.AlertV2
 import org.opensearch.alerting.modelv2.MonitorV2
 import org.opensearch.alerting.modelv2.MonitorV2RunResult
@@ -45,7 +49,6 @@ import org.opensearch.commons.alerting.model.userErrorMessage
 import org.opensearch.core.common.Strings
 import org.opensearch.core.rest.RestStatus
 import org.opensearch.core.xcontent.ToXContent
-import org.opensearch.sql.plugin.transport.TransportPPLQueryRequest
 import org.opensearch.transport.TransportService
 import org.opensearch.transport.client.node.NodeClient
 import java.time.Instant
@@ -56,8 +59,6 @@ import java.util.Locale
 
 object PPLSQLMonitorRunner : MonitorV2Runner {
     private val logger = LogManager.getLogger(javaClass)
-
-    private const val PPL_SQL_QUERY_FIELD = "query" // name of PPL query field when passing into PPL/SQL Execute API call
 
     override suspend fun runMonitorV2(
         monitorV2: MonitorV2,
@@ -572,75 +573,5 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
                 }
             }
         }
-    }
-
-    /* public util functions */
-
-    // appends user-defined custom trigger condition to PPL query, only for custom condition Triggers
-    fun appendCustomCondition(query: String, customCondition: String): String {
-        return "$query | $customCondition"
-    }
-
-    fun appendDataRowsLimit(query: String, maxDataRows: Long): String {
-        return "$query | head $maxDataRows"
-    }
-
-    // returns PPL query response as parsable JSONObject
-    suspend fun executePplQuery(query: String, client: NodeClient): JSONObject {
-        // call PPL plugin to execute time filtered query
-        val transportPplQueryRequest = TransportPPLQueryRequest(
-            query,
-            JSONObject(mapOf(PPL_SQL_QUERY_FIELD to query)),
-            null // null path falls back to a default path internal to SQL/PPL Plugin
-        )
-
-        val transportPplQueryResponse = PPLPluginInterface.suspendUntil {
-            this.executeQuery(
-                client,
-                transportPplQueryRequest,
-                it
-            )
-        }
-
-        val queryResponseJson = JSONObject(transportPplQueryResponse.result)
-
-        return queryResponseJson
-    }
-
-    // searches a given custom condition eval statement for the name of
-    // the eval result variable and returns it
-    fun findEvalResultVar(customCondition: String): String {
-        // the PPL keyword "eval", followed by a whitespace must be present, otherwise a syntax error from PPL plugin would've
-        // been thrown when executing the query (without the whitespace, the query would've had something like "evalresult",
-        // which is invalid PPL
-        val regex = """\beval\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=""".toRegex()
-        val evalResultVar = regex.find(customCondition)?.groupValues?.get(1)
-            ?: throw IllegalArgumentException("Given custom condition is invalid, could not find eval result variable")
-        return evalResultVar
-    }
-
-    fun findEvalResultVarIdxInSchema(customConditionQueryResponse: JSONObject, evalResultVarName: String): Int {
-        // find the index eval statement result variable in the PPL query response schema
-        val schemaList = customConditionQueryResponse.getJSONArray("schema")
-        var evalResultVarIdx = -1
-        for (i in 0 until schemaList.length()) {
-            val schemaObj = schemaList.getJSONObject(i)
-            val columnName = schemaObj.getString("name")
-
-            if (columnName == evalResultVarName) {
-                evalResultVarIdx = i
-                break
-            }
-        }
-
-        // eval statement result variable should always be found
-        if (evalResultVarIdx == -1) {
-            throw IllegalStateException(
-                "expected to find eval statement results variable \"$evalResultVarName\" in results " +
-                    "of PPL query with custom condition, but did not."
-            )
-        }
-
-        return evalResultVarIdx
     }
 }

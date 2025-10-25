@@ -11,7 +11,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.opensearch.action.search.SearchResponse
 import org.opensearch.action.search.ShardSearchFailure
+import org.opensearch.alerting.core.ppl.PPLPluginInterface
 import org.opensearch.alerting.modelv2.MonitorV2
+import org.opensearch.alerting.opensearchapi.suspendUntil
 import org.opensearch.commons.alerting.model.Monitor
 import org.opensearch.commons.alerting.model.ScheduledJob
 import org.opensearch.commons.alerting.model.Workflow
@@ -21,7 +23,9 @@ import org.opensearch.search.aggregations.InternalAggregations
 import org.opensearch.search.internal.InternalSearchResponse
 import org.opensearch.search.profile.SearchProfileShardResults
 import org.opensearch.search.suggest.Suggest
+import org.opensearch.sql.plugin.transport.TransportPPLQueryRequest
 import org.opensearch.transport.RemoteTransportException
+import org.opensearch.transport.client.node.NodeClient
 import java.util.Collections
 
 object AlertingV2Utils {
@@ -45,6 +49,74 @@ object AlertingV2Utils {
             return IllegalStateException("The ID given corresponds to a scheduled job of unknown type: ${scheduledJob.javaClass.name}")
         }
         return null
+    }
+
+    // appends user-defined custom trigger condition to PPL query, only for custom condition Triggers
+    fun appendCustomCondition(query: String, customCondition: String): String {
+        return "$query | $customCondition"
+    }
+
+    fun appendDataRowsLimit(query: String, maxDataRows: Long): String {
+        return "$query | head $maxDataRows"
+    }
+
+    // returns PPL query response as parsable JSONObject
+    suspend fun executePplQuery(query: String, client: NodeClient): JSONObject {
+        // call PPL plugin to execute query
+        val transportPplQueryRequest = TransportPPLQueryRequest(
+            query,
+            JSONObject(mapOf("query" to query)),
+            null // null path falls back to a default path internal to SQL/PPL Plugin
+        )
+
+        val transportPplQueryResponse = PPLPluginInterface.suspendUntil {
+            this.executeQuery(
+                client,
+                transportPplQueryRequest,
+                it
+            )
+        }
+
+        val queryResponseJson = JSONObject(transportPplQueryResponse.result)
+
+        return queryResponseJson
+    }
+
+    // searches a given custom condition eval statement for the name of
+    // the eval result variable and returns it
+    fun findEvalResultVar(customCondition: String): String {
+        // the PPL keyword "eval", followed by a whitespace must be present, otherwise a syntax error from PPL plugin would've
+        // been thrown when executing the query (without the whitespace, the query would've had something like "evalresult",
+        // which is invalid PPL
+        val regex = """\beval\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=""".toRegex()
+        val evalResultVar = regex.find(customCondition)?.groupValues?.get(1)
+            ?: throw IllegalArgumentException("Given custom condition is invalid, could not find eval result variable")
+        return evalResultVar
+    }
+
+    fun findEvalResultVarIdxInSchema(customConditionQueryResponse: JSONObject, evalResultVarName: String): Int {
+        // find the index eval statement result variable in the PPL query response schema
+        val schemaList = customConditionQueryResponse.getJSONArray("schema")
+        var evalResultVarIdx = -1
+        for (i in 0 until schemaList.length()) {
+            val schemaObj = schemaList.getJSONObject(i)
+            val columnName = schemaObj.getString("name")
+
+            if (columnName == evalResultVarName) {
+                evalResultVarIdx = i
+                break
+            }
+        }
+
+        // eval statement result variable should always be found
+        if (evalResultVarIdx == -1) {
+            throw IllegalStateException(
+                "expected to find eval statement results variable \"$evalResultVarName\" in results " +
+                    "of PPL query with custom condition, but did not."
+            )
+        }
+
+        return evalResultVarIdx
     }
 
     fun getIndicesFromPplQuery(pplQuery: String): List<String> {
