@@ -168,14 +168,6 @@ class AlertV2Indices(
         }
     }
 
-    fun isAlertV2Initialized(): Boolean {
-        return alertV2IndexInitialized && alertV2HistoryIndexInitialized
-    }
-
-    fun isAlertV2HistoryEnabled(): Boolean {
-        return alertV2HistoryEnabled
-    }
-
     suspend fun createOrUpdateAlertV2Index() {
         if (!alertV2IndexInitialized) {
             alertV2IndexInitialized = createIndex(ALERT_V2_INDEX, alertV2Mapping())
@@ -239,7 +231,6 @@ class AlertV2Indices(
             targetIndex = IndexUtils.getIndexNameWithAlias(clusterState, index)
         }
 
-        // TODO call getMapping and compare actual mappings here instead of this
         if (targetIndex == IndexUtils.lastUpdatedAlertV2HistoryIndex) {
             return
         }
@@ -260,11 +251,6 @@ class AlertV2Indices(
             ALERT_V2_INDEX -> IndexUtils.alertV2IndexUpdated()
             ALERT_V2_HISTORY_WRITE_INDEX -> IndexUtils.lastUpdatedAlertV2HistoryIndex = targetIndex
         }
-    }
-
-    private fun rolloverAndDeleteAlertHistoryIndices() {
-        if (alertV2HistoryEnabled) rolloverAlertV2HistoryIndex()
-        deleteOldIndices("History", ALERT_V2_HISTORY_ALL)
     }
 
     private fun rolloverIndex(
