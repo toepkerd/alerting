@@ -25,8 +25,6 @@ import java.util.concurrent.TimeUnit
  * --tests "org.opensearch.alerting.PPLMonitorRunnerIT"
  */
 class PPLSQLMonitorRunnerIT : AlertingRestTestCase() {
-
-    /* Test Cases */
     fun `test running number of results condition and result set mode ppl monitor`() {
         createIndex(TEST_INDEX_NAME, Settings.EMPTY, TEST_INDEX_MAPPINGS)
         indexDocFromSomeTimeAgo(2, MINUTES, "abc", 5)
@@ -275,7 +273,7 @@ class PPLSQLMonitorRunnerIT : AlertingRestTestCase() {
                 triggers = listOf(
                     randomPPLTrigger(
                         throttleDuration = null,
-                        expireDuration = 1,
+                        expireDuration = 1L,
                         mode = TriggerMode.RESULT_SET,
                         conditionType = ConditionType.NUMBER_OF_RESULTS,
                         numResultsCondition = NumResultsCondition.GREATER_THAN,

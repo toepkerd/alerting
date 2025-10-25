@@ -20,6 +20,7 @@ import org.opensearch.alerting.AlertingPlugin.Companion.EMAIL_GROUP_BASE_URI
 import org.opensearch.alerting.AlertingPlugin.Companion.MONITOR_V2_BASE_URI
 import org.opensearch.alerting.alerts.AlertIndices
 import org.opensearch.alerting.alerts.AlertIndices.Companion.FINDING_HISTORY_WRITE_INDEX
+import org.opensearch.alerting.alertsv2.AlertV2Indices
 import org.opensearch.alerting.core.settings.ScheduledJobSettings
 import org.opensearch.alerting.model.destination.Chime
 import org.opensearch.alerting.model.destination.CustomWebhook
@@ -27,6 +28,7 @@ import org.opensearch.alerting.model.destination.Destination
 import org.opensearch.alerting.model.destination.Slack
 import org.opensearch.alerting.model.destination.email.EmailAccount
 import org.opensearch.alerting.model.destination.email.EmailGroup
+import org.opensearch.alerting.modelv2.AlertV2
 import org.opensearch.alerting.modelv2.MonitorV2
 import org.opensearch.alerting.modelv2.PPLSQLMonitor
 import org.opensearch.alerting.settings.AlertingSettings
@@ -824,6 +826,35 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         }
     }
 
+    protected fun searchAlertV2s(
+        monitorV2Id: String,
+        indices: String = AlertV2Indices.ALERT_V2_INDEX,
+        refresh: Boolean = true
+    ): List<AlertV2> {
+        try {
+            if (refresh) refreshIndex(indices)
+        } catch (e: Exception) {
+            logger.warn("Could not refresh index $indices because: ${e.message}")
+            return emptyList()
+        }
+
+        // If this is a test monitor (it doesn't have an ID) and no alerts will be saved for it.
+        val searchParams = if (monitorV2Id != MonitorV2.NO_ID) mapOf("routing" to monitorV2Id) else mapOf()
+        val request = """
+                { "version" : true,
+                  "query" : { "term" : { "${AlertV2.MONITOR_V2_ID_FIELD}" : "$monitorV2Id" } }
+                }
+        """.trimIndent()
+        val httpResponse = adminClient().makeRequest("GET", "/$indices/_search", searchParams, StringEntity(request, APPLICATION_JSON))
+        assertEquals("Search failed", RestStatus.OK, httpResponse.restStatus())
+
+        val searchResponse = SearchResponse.fromXContent(createParser(jsonXContent, httpResponse.entity.content))
+        return searchResponse.hits.hits.map {
+            val xcp = createParser(jsonXContent, it.sourceRef).also { it.nextToken() }
+            AlertV2.parse(xcp, it.id, it.version)
+        }
+    }
+
     protected fun acknowledgeAlerts(monitor: Monitor, vararg alerts: Alert): Response {
         val request = XContentFactory.jsonBuilder().startObject()
             .array("alerts", *alerts.map { it.id }.toTypedArray())
@@ -941,16 +972,15 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         return client.makeRequest("POST", "$WORKFLOW_ALERTING_BASE_URI/$workflowId/_execute", params)
     }
 
-    protected fun executeMonitorV2(monitorId: String, params: Map<String, String> = mutableMapOf()): Response {
-        return client().makeRequest("POST", "$MONITOR_V2_BASE_URI/$monitorId/_execute", params)
-    }
-
     protected fun executeMonitor(monitor: Monitor, params: Map<String, String> = mapOf()): Response {
         return executeMonitor(client(), monitor, params)
     }
 
     protected fun executeMonitor(client: RestClient, monitor: Monitor, params: Map<String, String> = mapOf()): Response =
         client.makeRequest("POST", "$ALERTING_BASE_URI/_execute", params, monitor.toHttpEntityWithUser())
+
+    protected fun executeMonitorV2(monitorId: String, params: Map<String, String> = mutableMapOf()): Response =
+        client().makeRequest("POST", "$MONITOR_V2_BASE_URI/$monitorId/_execute", params)
 
     protected fun searchFindings(params: Map<String, String> = mutableMapOf()): GetFindingsResponse {
 
@@ -1391,6 +1421,14 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         createIndex(encodedHistoryIndex, settings, mappingHack, "\"${AlertIndices.FINDING_HISTORY_WRITE_INDEX}\" : {}")
     }
 
+    fun putAlertV2Mappings(mapping: String? = null) {
+        val mappingHack = if (mapping != null) mapping else AlertV2Indices.alertV2Mapping().trimStart('{').trimEnd('}')
+        val encodedHistoryIndex = URLEncoder.encode(AlertV2Indices.ALERT_V2_HISTORY_INDEX_PATTERN, Charsets.UTF_8.toString())
+        val settings = Settings.builder().put("index.hidden", true).build()
+        createIndex(AlertV2Indices.ALERT_V2_INDEX, settings, mappingHack)
+        createIndex(encodedHistoryIndex, settings, mappingHack, "\"${AlertV2Indices.ALERT_V2_HISTORY_WRITE_INDEX}\" : {}")
+    }
+
     fun scheduledJobMappings(): String {
         return javaClass.classLoader.getResource("mappings/scheduled-jobs.json").readText()
     }
@@ -1709,31 +1747,6 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         client().performRequest(request)
     }
 
-    fun createAdminLevelCustomIndexRole(name: String, index: String) {
-        val request = Request("PUT", "/_plugins/_security/api/roles/$name")
-        var entity = "{\n" +
-            "\"cluster_permissions\": [\n" +
-            "\"*\"\n" +
-            "],\n" +
-            "\"index_permissions\": [\n" +
-            "{\n" +
-            "\"index_patterns\": [\n" +
-            "\"$index\"\n" +
-            "],\n" +
-            "\"dls\": \"\",\n" +
-            "\"fls\": [],\n" +
-            "\"masked_fields\": [],\n" +
-            "\"allowed_actions\": [\n" +
-            "\"*\"\n" +
-            "]\n" +
-            "}\n" +
-            "],\n" +
-            "\"tenant_permissions\": []\n" +
-            "}"
-        request.setJsonEntity(entity)
-        client().performRequest(request)
-    }
-
     private fun createCustomIndexRole(name: String, index: String, clusterPermissions: List<String?>) {
         val request = Request("PUT", "/_plugins/_security/api/roles/$name")
 
@@ -1882,25 +1895,6 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         createUser(user, backendRoles.toTypedArray())
         createTestIndex(index)
         createCustomIndexRole(role, index, clusterPermissions)
-        createUserRolesMapping(role, arrayOf(user))
-    }
-
-    // creates a user mapped to a custom role that has full opensearch access,
-    // and optionally, limited access to specific indices.
-    // because this user is not explicitly mapped to all_access, this
-    // user won't technically be an admin user. this means they don't
-    // bypass RBAC checks, and will honor filter by if enabled even
-    // though they have full, admin-level access to opensearch. this
-    // creates a user for tests that put opensearch security actions
-    // mappings out of scope, and only want to test RBAC filtering
-    fun createUserWithAdminLevelCustomRole(
-        user: String,
-        backendRoles: List<String>,
-        role: String,
-        index: String = "*"
-    ) {
-        createUser(user, backendRoles.toTypedArray())
-        createAdminLevelCustomIndexRole(role, index)
         createUserRolesMapping(role, arrayOf(user))
     }
 

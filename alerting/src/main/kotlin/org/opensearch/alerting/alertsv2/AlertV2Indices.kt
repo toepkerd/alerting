@@ -49,7 +49,6 @@ import java.time.Instant
 private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO)
 private val logger = LogManager.getLogger(AlertV2Indices::class.java)
 
-// TODO: find what you can and factor into to IndexUtils.kt
 class AlertV2Indices(
     settings: Settings,
     private val client: Client,

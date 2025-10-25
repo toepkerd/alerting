@@ -107,6 +107,7 @@ class AlertV2Mover(
     // if alertV2 history is enabled, move expired alerts to alertV2 history indices
     // if alertV2 history is disabled, permanently delete expired alerts
     private fun moveOrDeleteAlertV2s() {
+        logger.info("in move or delete alert v2")
         if (!areAlertV2IndicesPresent()) {
             return
         }
@@ -117,8 +118,10 @@ class AlertV2Mover(
             var copyResponse: BulkResponse? = null
             val deleteResponse: BulkResponse?
             if (!alertV2HistoryEnabled) {
+                logger.info("alert history disabled")
                 deleteResponse = deleteExpiredAlerts(expiredAlertsSearchResponse)
             } else {
+                logger.info("alert history enabled")
                 copyResponse = copyExpiredAlerts(expiredAlertsSearchResponse)
                 deleteResponse = deleteExpiredAlertsThatWereCopied(copyResponse)
             }
@@ -142,7 +145,7 @@ class AlertV2Mover(
     }
 
     private suspend fun copyExpiredAlerts(expiredAlertsSearchResponse: SearchResponse): BulkResponse? {
-        // If no alerts are found, simply return
+        // If no expired alerts are found, simply return
         if (expiredAlertsSearchResponse.hits.totalHits?.value == 0L) {
             return null
         }
@@ -164,7 +167,12 @@ class AlertV2Mover(
         return copyResponse
     }
 
-    private suspend fun deleteExpiredAlerts(expiredAlertsSearchResponse: SearchResponse): BulkResponse {
+    private suspend fun deleteExpiredAlerts(expiredAlertsSearchResponse: SearchResponse): BulkResponse? {
+        // If no expired alerts are found, simply return
+        if (expiredAlertsSearchResponse.hits.totalHits?.value == 0L) {
+            return null
+        }
+
         val deleteRequests = expiredAlertsSearchResponse.hits.map {
             DeleteRequest(AlertV2Indices.ALERT_V2_INDEX, it.id)
                 .version(it.version)
@@ -188,7 +196,8 @@ class AlertV2Mover(
                 .version(it.version)
                 .versionType(VersionType.EXTERNAL_GTE)
         }
-        val deleteResponse: BulkResponse = client.suspendUntil { bulk(BulkRequest().add(deleteRequests), it) }
+        val deleteRequest = BulkRequest().add(deleteRequests)
+        val deleteResponse: BulkResponse = client.suspendUntil { bulk(deleteRequest, it) }
 
         return deleteResponse
     }

@@ -327,7 +327,7 @@ data class PPLSQLMonitor(
                     TIMESTAMP_FIELD -> timestampField = if (xcp.currentToken() == XContentParser.Token.VALUE_NULL) null else xcp.text()
                     LAST_UPDATE_TIME_FIELD -> lastUpdateTime = xcp.instant()
                     ENABLED_TIME_FIELD -> enabledTime = xcp.instant()
-                    DESCRIPTION_FIELD -> description = xcp.text()
+                    DESCRIPTION_FIELD -> description = if (xcp.currentToken() == XContentParser.Token.VALUE_NULL) null else xcp.text()
                     USER_FIELD -> user = if (xcp.currentToken() == XContentParser.Token.VALUE_NULL) null else User.parse(xcp)
                     TRIGGERS_FIELD -> {
                         XContentParserUtils.ensureExpectedToken(
@@ -352,7 +352,7 @@ data class PPLSQLMonitor(
                         queryLanguage = enumMatchResult
                     }
                     QUERY_FIELD -> query = xcp.text()
-                    else -> throw IllegalArgumentException("Unexpected field when parsing PPL Monitor: $fieldName")
+                    else -> throw IllegalArgumentException("Unexpected field when parsing PPL/SQL Monitor: $fieldName")
                 }
             }
 

@@ -316,7 +316,7 @@ fun randomPPLMonitor(
     timestampField: String? = lookBackWindow?.let { TIMESTAMP_FIELD },
     lastUpdateTime: Instant = Instant.now().truncatedTo(ChronoUnit.MILLIS),
     enabledTime: Instant? = if (enabled) Instant.now().truncatedTo(ChronoUnit.MILLIS) else null,
-    description: String? = "some description",
+    description: String? = if (randomBoolean()) "some description" else null,
     triggers: List<PPLSQLTrigger> = List(randomIntBetween(1, 5)) { randomPPLTrigger() },
     user: User? = randomUser(),
     queryLanguage: QueryLanguage = QueryLanguage.PPL,
