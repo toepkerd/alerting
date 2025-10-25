@@ -15,10 +15,14 @@ import org.opensearch.action.bulk.BulkRequest
 import org.opensearch.action.bulk.BulkResponse
 import org.opensearch.action.index.IndexRequest
 import org.opensearch.action.support.WriteRequest
+import org.opensearch.alerting.AlertingV2Utils.appendCustomCondition
+import org.opensearch.alerting.AlertingV2Utils.appendDataRowsLimit
 import org.opensearch.alerting.AlertingV2Utils.capPplQueryResultsSize
+import org.opensearch.alerting.AlertingV2Utils.executePplQuery
+import org.opensearch.alerting.AlertingV2Utils.findEvalResultVar
+import org.opensearch.alerting.AlertingV2Utils.findEvalResultVarIdxInSchema
 import org.opensearch.alerting.QueryLevelMonitorRunner.getConfigAndSendNotification
 import org.opensearch.alerting.alertsv2.AlertV2Indices
-import org.opensearch.alerting.core.ppl.PPLPluginInterface
 import org.opensearch.alerting.modelv2.AlertV2
 import org.opensearch.alerting.modelv2.MonitorV2
 import org.opensearch.alerting.modelv2.MonitorV2RunResult
@@ -45,7 +49,6 @@ import org.opensearch.commons.alerting.model.userErrorMessage
 import org.opensearch.core.common.Strings
 import org.opensearch.core.rest.RestStatus
 import org.opensearch.core.xcontent.ToXContent
-import org.opensearch.sql.plugin.transport.TransportPPLQueryRequest
 import org.opensearch.transport.TransportService
 import org.opensearch.transport.client.node.NodeClient
 import java.time.Instant
@@ -56,8 +59,6 @@ import java.util.Locale
 
 object PPLSQLMonitorRunner : MonitorV2Runner {
     private val logger = LogManager.getLogger(javaClass)
-
-    private const val PPL_SQL_QUERY_FIELD = "query" // name of PPL query field when passing into PPL/SQL Execute API call
 
     override suspend fun runMonitorV2(
         monitorV2: MonitorV2,
@@ -109,10 +110,10 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
             val lookBackWindow = pplSqlMonitor.lookBackWindow!!
             val lookbackPeriodStart = periodEnd.minus(lookBackWindow, ChronoUnit.MINUTES)
             val timeFilteredQuery = addTimeFilter(pplSqlMonitor.query, lookbackPeriodStart, periodEnd, pplSqlMonitor.timestampField!!)
-            logger.info("time filtered query: $timeFilteredQuery")
+            logger.debug("time filtered query: $timeFilteredQuery")
             timeFilteredQuery
         } else {
-            logger.info("look back window not specified, proceeding with query: ${pplSqlMonitor.query}")
+            logger.debug("look back window not specified, proceeding with query: ${pplSqlMonitor.query}")
             // otherwise, don't inject any time filter whatsoever
             // unless the query itself has user-specified time filters, this query
             // will return all applicable data in the cluster
@@ -126,14 +127,14 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
                 // before even running the trigger itself
                 val throttled = checkForThrottle(pplSqlTrigger, timeOfCurrentExecution, manual)
                 if (throttled) {
-                    logger.info("throttling trigger ${pplSqlTrigger.name} from monitor ${pplSqlMonitor.name}")
+                    logger.debug("throttling trigger ${pplSqlTrigger.name} from monitor ${pplSqlMonitor.name}")
 
                     // automatically return that this trigger is untriggered
                     triggerResults[pplSqlTrigger.id] = PPLSQLTriggerRunResult(pplSqlTrigger.name, false, null)
 
                     continue
                 }
-                logger.info("throttle check passed, executing trigger ${pplSqlTrigger.name} from monitor ${pplSqlMonitor.name}")
+                logger.debug("throttle check passed, executing trigger ${pplSqlTrigger.name} from monitor ${pplSqlMonitor.name}")
 
                 // if trigger uses custom condition, append the custom condition to query, otherwise simply proceed
                 val queryToExecute = if (pplSqlTrigger.conditionType == ConditionType.NUMBER_OF_RESULTS) { // number of results trigger
@@ -158,7 +159,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
                 ) {
                     executePplQuery(limitedQueryToExecute, nodeClient)
                 }
-                logger.info("query execution results for trigger ${pplSqlTrigger.name}: $queryResponseJson")
+                logger.debug("query results for trigger ${pplSqlTrigger.name}: $queryResponseJson")
 
                 // store the query results for Execute Monitor API response
                 // unlike the query results stored in alerts and notifications, which must be size capped
@@ -170,12 +171,6 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
                 // to HTTP's response size limits
                 pplSqlQueryResults[pplSqlTrigger.id] = queryResponseJson.toMap()
 
-                // retrieve the number of results
-                // for number of results triggers, this is simply the number of PPL query results
-                // for custom triggers, this is the number of rows in the query response's eval result column that evaluated to true
-
-                logger.info("number of results: ${queryResponseJson.getLong("total")}")
-
                 // determine if the trigger condition has been met
                 val triggered = if (pplSqlTrigger.conditionType == ConditionType.NUMBER_OF_RESULTS) { // number of results trigger
                     evaluateNumResultsTrigger(queryResponseJson, pplSqlTrigger.numResultsCondition!!, pplSqlTrigger.numResultsValue!!)
@@ -183,7 +178,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
                     evaluateCustomTrigger(queryResponseJson, pplSqlTrigger.customCondition!!)
                 }
 
-                logger.info("PPLTrigger ${pplSqlTrigger.name} triggered: $triggered")
+                logger.debug("PPLTrigger ${pplSqlTrigger.name} triggered: $triggered")
 
                 // store the trigger execution results for Execute Monitor API response
                 triggerResults[pplSqlTrigger.id] = PPLSQLTriggerRunResult(pplSqlTrigger.name, triggered, null)
@@ -393,7 +388,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
             }
         }
 
-        logger.info("individualRows: $individualRows")
+        logger.debug("individualRows: $individualRows")
 
         // there may be many query result rows, and generating an alert for each of them could lead to cluster issues,
         // so limit the number of per_result alerts that are generated
@@ -491,7 +486,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
         retryPolicy: BackoffPolicy,
         client: NodeClient
     ) {
-        logger.info("received alerts: $alerts")
+        logger.debug("received alerts: $alerts")
 
         var requestsToRetry = alerts.flatMap { alert ->
             listOf<DocWriteRequest<*>>(
@@ -509,7 +504,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
             val bulkResponse: BulkResponse = client.suspendUntil { client.bulk(bulkRequest, it) }
             val failedResponses = (bulkResponse.items ?: arrayOf()).filter { it.isFailed }
             failedResponses.forEach {
-                logger.info("write alerts failed responses: ${it.failureMessage}")
+                logger.debug("write alerts failed responses: ${it.failureMessage}")
             }
             requestsToRetry = failedResponses.filter { it.status() == RestStatus.TOO_MANY_REQUESTS }
                 .map { bulkRequest.requests()[it.itemId] as IndexRequest }
@@ -536,7 +531,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
             .routing(pplSqlMonitor.id)
         val indexResponse = client.suspendUntil { index(indexRequest, it) }
 
-        logger.info("PPLSQLMonitor update with last execution times index response: ${indexResponse.result}")
+        logger.debug("PPLSQLMonitor update with last execution times index response: ${indexResponse.result}")
     }
 
     suspend fun runAction(
@@ -578,75 +573,5 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
                 }
             }
         }
-    }
-
-    /* public util functions */
-
-    // appends user-defined custom trigger condition to PPL query, only for custom condition Triggers
-    fun appendCustomCondition(query: String, customCondition: String): String {
-        return "$query | $customCondition"
-    }
-
-    fun appendDataRowsLimit(query: String, maxDataRows: Long): String {
-        return "$query | head $maxDataRows"
-    }
-
-    // returns PPL query response as parsable JSONObject
-    suspend fun executePplQuery(query: String, client: NodeClient): JSONObject {
-        // call PPL plugin to execute time filtered query
-        val transportPplQueryRequest = TransportPPLQueryRequest(
-            query,
-            JSONObject(mapOf(PPL_SQL_QUERY_FIELD to query)),
-            null // null path falls back to a default path internal to SQL/PPL Plugin
-        )
-
-        val transportPplQueryResponse = PPLPluginInterface.suspendUntil {
-            this.executeQuery(
-                client,
-                transportPplQueryRequest,
-                it
-            )
-        }
-
-        val queryResponseJson = JSONObject(transportPplQueryResponse.result)
-
-        return queryResponseJson
-    }
-
-    // searches a given custom condition eval statement for the name of
-    // the eval result variable and returns it
-    fun findEvalResultVar(customCondition: String): String {
-        // the PPL keyword "eval", followed by a whitespace must be present, otherwise a syntax error from PPL plugin would've
-        // been thrown when executing the query (without the whitespace, the query would've had something like "evalresult",
-        // which is invalid PPL
-        val regex = """\beval\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=""".toRegex()
-        val evalResultVar = regex.find(customCondition)?.groupValues?.get(1)
-            ?: throw IllegalArgumentException("Given custom condition is invalid, could not find eval result variable")
-        return evalResultVar
-    }
-
-    fun findEvalResultVarIdxInSchema(customConditionQueryResponse: JSONObject, evalResultVarName: String): Int {
-        // find the index eval statement result variable in the PPL query response schema
-        val schemaList = customConditionQueryResponse.getJSONArray("schema")
-        var evalResultVarIdx = -1
-        for (i in 0 until schemaList.length()) {
-            val schemaObj = schemaList.getJSONObject(i)
-            val columnName = schemaObj.getString("name")
-
-            if (columnName == evalResultVarName) {
-                evalResultVarIdx = i
-                break
-            }
-        }
-
-        // eval statement result variable should always be found
-        if (evalResultVarIdx == -1) {
-            throw IllegalStateException(
-                "expected to find eval statement results variable \"$evalResultVarName\" in results " +
-                    "of PPL query with custom condition, but did not."
-            )
-        }
-
-        return evalResultVarIdx
     }
 }
