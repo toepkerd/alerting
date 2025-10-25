@@ -105,7 +105,9 @@ data class PPLSQLMonitor(
             }
         }
 
-        require(this.description?.length!! <= DESCRIPTION_MAX_LENGTH) { "Description must be under $DESCRIPTION_MAX_LENGTH characters" }
+        this.description?.let {
+            require(this.description.length <= DESCRIPTION_MAX_LENGTH) { "Description must be under $DESCRIPTION_MAX_LENGTH characters" }
+        }
 
         // for checking trigger ID uniqueness
         val triggerIds = mutableSetOf<String>()
