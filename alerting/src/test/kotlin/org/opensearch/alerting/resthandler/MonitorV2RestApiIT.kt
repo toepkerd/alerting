@@ -73,12 +73,12 @@ class MonitorV2RestApiIT : AlertingRestTestCase() {
     fun `test update ppl monitor`() {
         val originalMonitor = createRandomPPLMonitor()
 
-        val newMonitor = randomPPLMonitor()
+        val newMonitorConfig = randomPPLMonitor()
 
         val updateResponse = client().makeRequest(
             "PUT",
             "$MONITOR_V2_BASE_URI/${originalMonitor.id}",
-            emptyMap(), newMonitor.toHttpEntity()
+            emptyMap(), newMonitorConfig.toHttpEntity()
         )
 
         assertEquals("Update monitor failed", RestStatus.OK, updateResponse.restStatus())
@@ -87,7 +87,7 @@ class MonitorV2RestApiIT : AlertingRestTestCase() {
         assertEquals("Version not incremented", (originalMonitor.version + 1).toInt(), responseBody["_version"] as Int)
 
         val updatedMonitor = getMonitorV2(originalMonitor.id) as PPLSQLMonitor
-        assertPplMonitorsEqual(newMonitor, updatedMonitor)
+        assertPplMonitorsEqual(newMonitorConfig, updatedMonitor)
     }
 
     fun `test get ppl monitor`() {

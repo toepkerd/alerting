@@ -191,6 +191,10 @@ class AlertV2Indices(
         alertV2HistoryIndexInitialized
     }
 
+    fun isAlertV2Initialized(): Boolean {
+        return alertV2IndexInitialized && alertV2HistoryIndexInitialized
+    }
+
     private fun rolloverAndDeleteAlertV2HistoryIndices() {
         if (alertV2HistoryEnabled) rolloverAlertV2HistoryIndex()
         deleteOldIndices("History", ALERT_V2_HISTORY_ALL)

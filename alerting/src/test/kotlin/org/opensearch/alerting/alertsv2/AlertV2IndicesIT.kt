@@ -5,9 +5,6 @@
 
 package org.opensearch.alerting.alertsv2
 
-import org.apache.hc.core5.http.ContentType.APPLICATION_JSON
-import org.apache.hc.core5.http.io.entity.StringEntity
-import org.opensearch.action.search.SearchResponse
 import org.opensearch.alerting.AlertingRestTestCase
 import org.opensearch.alerting.TEST_INDEX_MAPPINGS
 import org.opensearch.alerting.TEST_INDEX_NAME
@@ -16,12 +13,12 @@ import org.opensearch.alerting.modelv2.PPLSQLMonitor
 import org.opensearch.alerting.modelv2.PPLSQLTrigger
 import org.opensearch.alerting.modelv2.PPLSQLTrigger.ConditionType
 import org.opensearch.alerting.modelv2.PPLSQLTrigger.NumResultsCondition
+import org.opensearch.alerting.modelv2.PPLSQLTrigger.TriggerMode
 import org.opensearch.alerting.randomPPLMonitor
 import org.opensearch.alerting.randomPPLTrigger
 import org.opensearch.alerting.settings.AlertingSettings
 import org.opensearch.common.settings.Settings
 import org.opensearch.common.xcontent.XContentType
-import org.opensearch.common.xcontent.json.JsonXContent.jsonXContent
 import org.opensearch.commons.alerting.model.IntervalSchedule
 import org.opensearch.commons.alerting.model.ScheduledJob
 import org.opensearch.core.rest.RestStatus
@@ -95,6 +92,7 @@ class AlertV2IndicesIT : AlertingRestTestCase() {
         OpenSearchTestCase.waitUntil({
             return@waitUntil (getAlertV2Indices().size >= 3)
         }, 2, TimeUnit.SECONDS)
+
         assertTrue("Did not find 3 alert v2 indices", getAlertV2Indices().size >= 3)
     }
 
@@ -186,6 +184,206 @@ class AlertV2IndicesIT : AlertingRestTestCase() {
         assertEquals(0, getAlertV2HistoryDocCount())
     }
 
+    fun `test generated alert gets expired because monitor was deleted with alert history enabled`() {
+        createIndex(TEST_INDEX_NAME, Settings.EMPTY, TEST_INDEX_MAPPINGS)
+        indexDocFromSomeTimeAgo(1, MINUTES, "abc", 5)
+
+        val pplMonitor = createRandomPPLMonitor(
+            randomPPLMonitor(
+                enabled = true,
+                schedule = IntervalSchedule(interval = 20, unit = MINUTES),
+                triggers = listOf(
+                    randomPPLTrigger(
+                        throttleDuration = null,
+                        // for this test, configured expire can't be the reason for alert expiration
+                        expireDuration = 1000L,
+                        mode = TriggerMode.RESULT_SET,
+                        conditionType = ConditionType.NUMBER_OF_RESULTS,
+                        numResultsCondition = NumResultsCondition.GREATER_THAN,
+                        numResultsValue = 0L,
+                        customCondition = null
+                    )
+                ),
+                query = "source = $TEST_INDEX_NAME | head 10"
+            )
+        )
+
+        val executeResponse = executeMonitorV2(pplMonitor.id)
+        val triggered = isTriggered(pplMonitor, executeResponse)
+
+        val getAlertsResponsePreExpire = getAlertV2s()
+        val alertsGeneratedPreExpire = numAlerts(getAlertsResponsePreExpire) > 0
+
+        assert(triggered) { "Monitor should have triggered but it didn't" }
+        assert(alertsGeneratedPreExpire) { "Alerts should have been generated but they weren't" }
+
+        // delete the monitor
+        deleteMonitorV2(pplMonitor.id)
+
+        // sleep so postDelete can expire the generated alert
+        OpenSearchTestCase.waitUntil({
+            return@waitUntil false
+        }, 5, TimeUnit.SECONDS)
+
+        val getAlertsResponsePostExpire = getAlertV2s()
+        val alertsGeneratedPostExpire = numAlerts(getAlertsResponsePostExpire) > 0
+        assert(!alertsGeneratedPostExpire)
+
+        assertEquals(1, getAlertV2HistoryDocCount())
+    }
+
+    fun `test generated alert gets expired because monitor was edited with alert history enabled`() {
+        createIndex(TEST_INDEX_NAME, Settings.EMPTY, TEST_INDEX_MAPPINGS)
+        indexDocFromSomeTimeAgo(1, MINUTES, "abc", 5)
+
+        // first create a ppl monitor that's guaranteed to generate an alert
+        val initialPplTrigger = randomPPLTrigger(
+            id = "initialID",
+            throttleDuration = null,
+            // for this test, configured expire can't be the reason for alert expiration
+            expireDuration = 1000L,
+            mode = TriggerMode.RESULT_SET,
+            conditionType = ConditionType.NUMBER_OF_RESULTS,
+            numResultsCondition = NumResultsCondition.GREATER_THAN,
+            numResultsValue = 0L,
+            customCondition = null
+        )
+
+        val initialPplMonitorConfig = randomPPLMonitor(
+            enabled = true,
+            schedule = IntervalSchedule(interval = 20, unit = MINUTES),
+            triggers = listOf(initialPplTrigger),
+            query = "source = $TEST_INDEX_NAME | head 10"
+        )
+
+        val pplMonitor = createRandomPPLMonitor(initialPplMonitorConfig)
+
+        val executeResponse = executeMonitorV2(pplMonitor.id)
+        val triggered = isTriggered(pplMonitor, executeResponse)
+
+        val getAlertsResponsePreExpire = getAlertV2s()
+        val alertsGeneratedPreExpire = numAlerts(getAlertsResponsePreExpire) > 0
+
+        assert(triggered) { "Monitor should have triggered but it didn't" }
+        assert(alertsGeneratedPreExpire) { "Alerts should have been generated but they weren't" }
+
+        // update the monitor to any new config
+        updateMonitorV2(randomPPLMonitor().makeCopy(pplMonitor.id, pplMonitor.version))
+
+        // sleep so postIndex can expire the generated alert
+        OpenSearchTestCase.waitUntil({
+            return@waitUntil false
+        }, 5, TimeUnit.SECONDS)
+
+        val getAlertsResponsePostExpire = getAlertV2s()
+        val alertsGeneratedPostExpire = numAlerts(getAlertsResponsePostExpire) > 0
+        assert(!alertsGeneratedPostExpire)
+
+        assertEquals(1, getAlertV2HistoryDocCount())
+    }
+
+    fun `test generated alert gets expired because monitor was deleted with alert history disabled`() {
+        client().updateSettings(AlertingSettings.ALERT_V2_HISTORY_ENABLED.key, "false")
+
+        createIndex(TEST_INDEX_NAME, Settings.EMPTY, TEST_INDEX_MAPPINGS)
+        indexDocFromSomeTimeAgo(1, MINUTES, "abc", 5)
+
+        val pplMonitor = createRandomPPLMonitor(
+            randomPPLMonitor(
+                enabled = true,
+                schedule = IntervalSchedule(interval = 20, unit = MINUTES),
+                triggers = listOf(
+                    randomPPLTrigger(
+                        throttleDuration = null,
+                        // for this test, configured expire can't be the reason for alert expiration
+                        expireDuration = 1000L,
+                        mode = TriggerMode.RESULT_SET,
+                        conditionType = ConditionType.NUMBER_OF_RESULTS,
+                        numResultsCondition = NumResultsCondition.GREATER_THAN,
+                        numResultsValue = 0L,
+                        customCondition = null
+                    )
+                ),
+                query = "source = $TEST_INDEX_NAME | head 10"
+            )
+        )
+
+        val executeResponse = executeMonitorV2(pplMonitor.id)
+        val triggered = isTriggered(pplMonitor, executeResponse)
+
+        val getAlertsResponsePreExpire = getAlertV2s()
+        val alertsGeneratedPreExpire = numAlerts(getAlertsResponsePreExpire) > 0
+
+        assert(triggered) { "Monitor should have triggered but it didn't" }
+        assert(alertsGeneratedPreExpire) { "Alerts should have been generated but they weren't" }
+
+        // delete the monitor
+        deleteMonitorV2(pplMonitor.id)
+
+        // sleep so postDelete can expire the generated alert
+        OpenSearchTestCase.waitUntil({
+            return@waitUntil false
+        }, 5, TimeUnit.SECONDS)
+
+        val getAlertsResponsePostExpire = getAlertV2s()
+        val alertsGeneratedPostExpire = numAlerts(getAlertsResponsePostExpire) > 0
+        assert(!alertsGeneratedPostExpire)
+
+        assertEquals(0, getAlertV2HistoryDocCount())
+    }
+
+    fun `test generated alert gets expired because monitor was edited with alert history disabled`() {
+        client().updateSettings(AlertingSettings.ALERT_V2_HISTORY_ENABLED.key, "false")
+
+        createIndex(TEST_INDEX_NAME, Settings.EMPTY, TEST_INDEX_MAPPINGS)
+        indexDocFromSomeTimeAgo(1, MINUTES, "abc", 5)
+
+        // first create a ppl monitor that's guaranteed to generate an alert
+        val initialPplTrigger = randomPPLTrigger(
+            id = "initialID",
+            throttleDuration = null,
+            // for this test, configured expire can't be the reason for alert expiration
+            expireDuration = 1000L,
+            mode = TriggerMode.RESULT_SET,
+            conditionType = ConditionType.NUMBER_OF_RESULTS,
+            numResultsCondition = NumResultsCondition.GREATER_THAN,
+            numResultsValue = 0L,
+            customCondition = null
+        )
+
+        val initialPplMonitorConfig = randomPPLMonitor(
+            enabled = true,
+            schedule = IntervalSchedule(interval = 20, unit = MINUTES),
+            triggers = listOf(initialPplTrigger),
+            query = "source = $TEST_INDEX_NAME | head 10"
+        )
+
+        val pplMonitor = createRandomPPLMonitor(initialPplMonitorConfig)
+
+        val executeResponse = executeMonitorV2(pplMonitor.id)
+        val triggered = isTriggered(pplMonitor, executeResponse)
+
+        val getAlertsResponsePreExpire = getAlertV2s()
+        val alertsGeneratedPreExpire = numAlerts(getAlertsResponsePreExpire) > 0
+
+        assert(triggered) { "Monitor should have triggered but it didn't" }
+        assert(alertsGeneratedPreExpire) { "Alerts should have been generated but they weren't" }
+
+        // update the monitor to any new config
+        updateMonitorV2(randomPPLMonitor().makeCopy(pplMonitor.id, pplMonitor.version))
+
+        // sleep so postIndex can expire the generated alert
+        OpenSearchTestCase.waitUntil({
+            return@waitUntil false
+        }, 5, TimeUnit.SECONDS)
+
+        val getAlertsResponsePostExpire = getAlertV2s()
+        val alertsGeneratedPostExpire = numAlerts(getAlertsResponsePostExpire) > 0
+        assert(!alertsGeneratedPostExpire)
+
+        assertEquals(0, getAlertV2HistoryDocCount())
+    }
+
     private fun assertIndexExists(index: String) {
         val response = client().makeRequest("HEAD", index)
         assertEquals("Index $index does not exist.", RestStatus.OK, response.restStatus())
@@ -210,22 +408,6 @@ class AlertV2IndicesIT : AlertingRestTestCase() {
         responseList.filterIsInstance<Map<String, Any>>().forEach { indices.add(it["index"] as String) }
 
         return indices
-    }
-
-    private fun getAlertV2HistoryDocCount(): Long {
-        val request = """
-            {
-                "query": {
-                    "match_all": {}
-                }
-            }
-        """.trimIndent()
-        val response = adminClient().makeRequest(
-            "POST", "${AlertV2Indices.ALERT_V2_HISTORY_ALL}/_search", emptyMap(),
-            StringEntity(request, APPLICATION_JSON)
-        )
-        assertEquals("Request to get alert v2 history failed", RestStatus.OK, response.restStatus())
-        return SearchResponse.fromXContent(createParser(jsonXContent, response.entity.content)).hits.totalHits!!.value
     }
 
     // generates alerts by creating then executing a monitor,

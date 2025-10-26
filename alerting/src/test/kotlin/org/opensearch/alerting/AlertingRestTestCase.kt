@@ -221,6 +221,15 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         return response
     }
 
+    protected fun deleteMonitorV2(monitorV2Id: String): Response {
+        val response = client().makeRequest(
+            "DELETE", "$MONITOR_V2_BASE_URI/$monitorV2Id?refresh=true", emptyMap()
+        )
+        assertEquals("Unable to delete a monitor", RestStatus.OK, response.restStatus())
+
+        return response
+    }
+
     protected fun deleteWorkflow(workflow: Workflow, deleteDelegates: Boolean = false, refresh: Boolean = true): Response {
         val response = client().makeRequest(
             "DELETE",
@@ -635,6 +644,16 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         assertEquals("Unable to update a workflow", RestStatus.OK, response.restStatus())
         assertUserNull(response.asMap()["workflow"] as Map<String, Any>)
         return getWorkflow(workflowId = workflow.id)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    protected fun updateMonitorV2(monitorV2: MonitorV2, refresh: Boolean = false): MonitorV2 {
+        val response = client().makeRequest(
+            "PUT", "$MONITOR_V2_BASE_URI/${monitorV2.id}?refresh=$refresh",
+            emptyMap(), monitorV2.toHttpEntity()
+        )
+        assertEquals("Unable to update a monitorV2", RestStatus.OK, response.restStatus())
+        return getMonitorV2(monitorV2Id = monitorV2.id)
     }
 
     protected fun updateMonitorWithClient(
@@ -1470,8 +1489,7 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
     }
 
     private fun MonitorV2.toJsonString(): String {
-        val builder = XContentFactory.jsonBuilder()
-        return shuffleXContent(toXContent(builder, ToXContent.EMPTY_PARAMS)).string()
+        return shuffleXContent(toXContent(jsonBuilder(), ToXContent.EMPTY_PARAMS)).string()
     }
 
     protected fun MonitorV2.toHttpEntityWithUser(): HttpEntity {
@@ -2219,5 +2237,35 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
         val hits = xcp.map()["hits"]!! as Map<String, Map<String, Any>>
         val numberDocsFound = hits["total"]?.get("value")
         assertEquals("Unexpected number of PPL Monitors found in Search Monitors", expectedNum, numberDocsFound)
+    }
+
+    // takes in an execute monitor API response and returns true if the
+    // trigger condition was met. assumes the monitor executed only had 1 trigger
+    protected fun isTriggered(pplMonitor: PPLSQLMonitor, executeResponse: Response): Boolean {
+        val executeResponseMap = entityAsMap(executeResponse)
+        val triggerResultsObj = (executeResponseMap["trigger_results"] as Map<String, Any>)[pplMonitor.triggers[0].id] as Map<String, Any>
+        return triggerResultsObj["triggered"] as Boolean
+    }
+
+    // takes in a get alerts API response and returns the current number of active alerts
+    protected fun numAlerts(getAlertsResponse: Response): Int {
+        logger.info("get alerts response: ${entityAsMap(getAlertsResponse)}")
+        return entityAsMap(getAlertsResponse)["totalAlertV2s"] as Int
+    }
+
+    protected fun getAlertV2HistoryDocCount(): Long {
+        val request = """
+            {
+                "query": {
+                    "match_all": {}
+                }
+            }
+        """.trimIndent()
+        val response = adminClient().makeRequest(
+            "POST", "${AlertV2Indices.ALERT_V2_HISTORY_ALL}/_search", emptyMap(),
+            StringEntity(request, APPLICATION_JSON)
+        )
+        assertEquals("Request to get alert v2 history failed", RestStatus.OK, response.restStatus())
+        return SearchResponse.fromXContent(createParser(jsonXContent, response.entity.content)).hits.totalHits!!.value
     }
 }

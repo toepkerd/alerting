@@ -57,7 +57,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
 
-object PPLSQLMonitorRunner : MonitorV2Runner {
+object PPLSQLMonitorRunner : MonitorV2Runner() {
     private val logger = LogManager.getLogger(javaClass)
 
     override suspend fun runMonitorV2(

@@ -9,8 +9,8 @@ import org.apache.logging.log4j.LogManager
 import org.opensearch.action.search.SearchResponse
 import org.opensearch.action.support.ActionFilters
 import org.opensearch.action.support.HandledTransportAction
-import org.opensearch.alerting.AlertingV2Utils.getEmptySearchResponse
-import org.opensearch.alerting.AlertingV2Utils.isIndexNotFoundException
+import org.opensearch.alerting.AlertingV1Utils.getEmptySearchResponse
+import org.opensearch.alerting.AlertingV1Utils.isIndexNotFoundException
 import org.opensearch.alerting.actionv2.SearchMonitorV2Action
 import org.opensearch.alerting.actionv2.SearchMonitorV2Request
 import org.opensearch.alerting.modelv2.MonitorV2.Companion.MONITOR_V2_TYPE

@@ -94,7 +94,7 @@ abstract class MonitorRunner {
         }
     }
 
-    suspend fun getConfigAndSendNotification(
+    protected suspend fun getConfigAndSendNotification(
         action: Action,
         monitorCtx: MonitorRunnerExecutionContext,
         subject: String?,

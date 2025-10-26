@@ -50,7 +50,8 @@ interface MonitorV2 : ScheduledJob {
         enabledTime: Instant? = this.enabledTime,
         description: String? = this.description,
         user: User? = this.user,
-        // no support for overriding triggers in copy
+        // no support for overriding triggers in interface-level makeCopy(),
+        // triggers can be copied at instance-level data class copy()
         schemaVersion: Int = this.schemaVersion,
         lookBackWindow: Long? = this.lookBackWindow,
         timestampField: String? = this.timestampField

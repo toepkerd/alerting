@@ -5,11 +5,9 @@
 
 package org.opensearch.alerting
 
-import org.opensearch.alerting.modelv2.PPLSQLMonitor
 import org.opensearch.alerting.modelv2.PPLSQLTrigger.ConditionType
 import org.opensearch.alerting.modelv2.PPLSQLTrigger.NumResultsCondition
 import org.opensearch.alerting.modelv2.PPLSQLTrigger.TriggerMode
-import org.opensearch.client.Response
 import org.opensearch.common.settings.Settings
 import org.opensearch.commons.alerting.model.IntervalSchedule
 import org.opensearch.test.OpenSearchTestCase
@@ -393,21 +391,5 @@ class PPLSQLMonitorRunnerIT : AlertingRestTestCase() {
 
         assert(triggeredAgain) { "Monitor should have triggered again but it didn't" }
         assertEquals("A new alert should have been generated but was instead throttled", 2, numAlertsAgain)
-    }
-
-    /* Utils */
-
-    // takes in an execute monitor API response and returns true if the
-    // trigger condition was met. assumes the monitor executed only had 1 trigger
-    private fun isTriggered(pplMonitor: PPLSQLMonitor, executeResponse: Response): Boolean {
-        val executeResponseMap = entityAsMap(executeResponse)
-        val triggerResultsObj = (executeResponseMap["trigger_results"] as Map<String, Any>)[pplMonitor.triggers[0].id] as Map<String, Any>
-        return triggerResultsObj["triggered"] as Boolean
-    }
-
-    // takes in a get alerts API response and returns the current number of active alerts
-    private fun numAlerts(getAlertsResponse: Response): Int {
-        logger.info("get alerts response: ${entityAsMap(getAlertsResponse)}")
-        return entityAsMap(getAlertsResponse)["totalAlertV2s"] as Int
     }
 }

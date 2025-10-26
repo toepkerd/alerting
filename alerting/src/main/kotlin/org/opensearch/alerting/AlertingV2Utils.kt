@@ -5,28 +5,16 @@
 
 package org.opensearch.alerting
 
-import org.apache.lucene.search.TotalHits
-import org.apache.lucene.search.TotalHits.Relation
 import org.json.JSONArray
 import org.json.JSONObject
-import org.opensearch.action.search.SearchResponse
-import org.opensearch.action.search.ShardSearchFailure
 import org.opensearch.alerting.core.ppl.PPLPluginInterface
 import org.opensearch.alerting.modelv2.MonitorV2
 import org.opensearch.alerting.opensearchapi.suspendUntil
 import org.opensearch.commons.alerting.model.Monitor
 import org.opensearch.commons.alerting.model.ScheduledJob
 import org.opensearch.commons.alerting.model.Workflow
-import org.opensearch.index.IndexNotFoundException
-import org.opensearch.search.SearchHits
-import org.opensearch.search.aggregations.InternalAggregations
-import org.opensearch.search.internal.InternalSearchResponse
-import org.opensearch.search.profile.SearchProfileShardResults
-import org.opensearch.search.suggest.Suggest
 import org.opensearch.sql.plugin.transport.TransportPPLQueryRequest
-import org.opensearch.transport.RemoteTransportException
 import org.opensearch.transport.client.node.NodeClient
-import java.util.Collections
 
 object AlertingV2Utils {
     // Validates that the given scheduled job is a Monitor
@@ -167,42 +155,5 @@ object AlertingV2Utils {
         limitExceedMessageQueryResults.put("size", size)
 
         return limitExceedMessageQueryResults
-    }
-
-    // Checks if the exception is caused by an IndexNotFoundException (directly or nested).
-    fun isIndexNotFoundException(e: Exception): Boolean {
-        if (e is IndexNotFoundException) {
-            return true
-        }
-        if (e is RemoteTransportException) {
-            val cause = e.cause
-            if (cause is IndexNotFoundException) {
-                return true
-            }
-        }
-        return false
-    }
-
-    fun getEmptySearchResponse(): SearchResponse {
-        val internalSearchResponse = InternalSearchResponse(
-            SearchHits(emptyArray(), TotalHits(0L, Relation.EQUAL_TO), 0.0f),
-            InternalAggregations.from(Collections.emptyList()),
-            Suggest(Collections.emptyList()),
-            SearchProfileShardResults(Collections.emptyMap()),
-            false,
-            false,
-            0
-        )
-
-        return SearchResponse(
-            internalSearchResponse,
-            "",
-            0,
-            0,
-            0,
-            0,
-            ShardSearchFailure.EMPTY_ARRAY,
-            SearchResponse.Clusters.EMPTY
-        )
     }
 }

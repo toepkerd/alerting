@@ -27,6 +27,7 @@ import org.opensearch.alerting.actionv2.ExecuteMonitorV2Response
 import org.opensearch.alerting.alerts.AlertIndices
 import org.opensearch.alerting.alerts.AlertMover.Companion.moveAlerts
 import org.opensearch.alerting.alertsv2.AlertV2Indices
+import org.opensearch.alerting.alertsv2.AlertV2Mover.Companion.moveAlertV2s
 import org.opensearch.alerting.core.JobRunner
 import org.opensearch.alerting.core.ScheduledJobIndices
 import org.opensearch.alerting.core.lock.LockModel
@@ -331,15 +332,24 @@ object MonitorRunnerService : JobRunner, CoroutineScope, AbstractLifecycleCompon
                 }
             }
         } else if (job is MonitorV2) {
-            return
+            launch {
+                try {
+                    logger.info("in post index")
+                    monitorCtx.moveAlertsRetryPolicy!!.retry(logger) {
+                        if (monitorCtx.alertV2Indices!!.isAlertV2Initialized()) {
+                            logger.info("moving alerts in post index")
+                            moveAlertV2s(job.id, job, monitorCtx)
+                        }
+                    }
+                } catch (e: Exception) {
+                    logger.error("Failed to move active alertV2s for monitorV2 [${job.id}].", e)
+                }
+            }
         } else {
             throw IllegalArgumentException("Invalid job type")
         }
     }
 
-    // TODO: if MonitorV2 was deleted, skip trying to move alerts
-    // cluster throws failed to move alerts exception whenever a MonitorV2 is deleted
-    // because Alerting V2's stateless alerts don't need to be moved
     override fun postDelete(jobId: String) {
         launch {
             try {
@@ -357,6 +367,17 @@ object MonitorRunnerService : JobRunner, CoroutineScope, AbstractLifecycleCompon
                 }
             } catch (e: Exception) {
                 logger.error("Failed to move active alerts for monitor [$jobId].", e)
+            }
+            try {
+                logger.info("in post delete")
+                monitorCtx.moveAlertsRetryPolicy!!.retry(logger) {
+                    if (monitorCtx.alertV2Indices!!.isAlertV2Initialized()) {
+                        logger.info("moving alerts in post delete")
+                        moveAlertV2s(jobId, null, monitorCtx)
+                    }
+                }
+            } catch (e: Exception) {
+                logger.error("Failed to move active alertV2s for monitorV2 [$jobId].", e)
             }
         }
     }

@@ -13,7 +13,7 @@ import org.opensearch.action.get.GetRequest
 import org.opensearch.action.get.GetResponse
 import org.opensearch.action.support.ActionFilters
 import org.opensearch.action.support.HandledTransportAction
-import org.opensearch.alerting.AlertingV2Utils.isIndexNotFoundException
+import org.opensearch.alerting.AlertingV1Utils.isIndexNotFoundException
 import org.opensearch.alerting.AlertingV2Utils.validateMonitorV2
 import org.opensearch.alerting.actionv2.GetMonitorV2Action
 import org.opensearch.alerting.actionv2.GetMonitorV2Request
