@@ -16,6 +16,8 @@ import org.opensearch.action.index.IndexRequest
 import org.opensearch.action.search.SearchRequest
 import org.opensearch.action.search.SearchResponse
 import org.opensearch.alerting.modelv2.AlertV2
+import org.opensearch.alerting.modelv2.MonitorV2
+import org.opensearch.alerting.modelv2.MonitorV2.Companion.MONITOR_V2_TYPE
 import org.opensearch.alerting.opensearchapi.suspendUntil
 import org.opensearch.alerting.settings.AlertingSettings.Companion.ALERT_V2_HISTORY_ENABLED
 import org.opensearch.cluster.ClusterChangedEvent
@@ -27,6 +29,8 @@ import org.opensearch.common.xcontent.LoggingDeprecationHandler
 import org.opensearch.common.xcontent.XContentFactory
 import org.opensearch.common.xcontent.XContentHelper
 import org.opensearch.common.xcontent.XContentType
+import org.opensearch.commons.alerting.model.ScheduledJob
+import org.opensearch.commons.alerting.model.ScheduledJob.Companion.SCHEDULED_JOBS_INDEX
 import org.opensearch.core.common.bytes.BytesReference
 import org.opensearch.core.rest.RestStatus
 import org.opensearch.core.xcontent.NamedXContentRegistry
@@ -50,6 +54,7 @@ class AlertV2Mover(
     private val client: Client,
     private val threadPool: ThreadPool,
     private val clusterService: ClusterService,
+    private val xContentRegistry: NamedXContentRegistry,
 ) : ClusterStateListener {
     init {
         clusterService.addListener(this)
@@ -113,16 +118,16 @@ class AlertV2Mover(
         }
 
         scope.launch {
-            val expiredAlertsSearchResponse = searchForExpiredAlerts()
+            val expiredAlerts = searchForExpiredAlerts()
 
             var copyResponse: BulkResponse? = null
             val deleteResponse: BulkResponse?
             if (!alertV2HistoryEnabled) {
                 logger.info("alert history disabled")
-                deleteResponse = deleteExpiredAlerts(expiredAlertsSearchResponse)
+                deleteResponse = deleteExpiredAlerts(expiredAlerts)
             } else {
                 logger.info("alert history enabled")
-                copyResponse = copyExpiredAlerts(expiredAlertsSearchResponse)
+                copyResponse = copyExpiredAlerts(expiredAlerts)
                 deleteResponse = deleteExpiredAlertsThatWereCopied(copyResponse)
             }
             checkForFailures(copyResponse)
@@ -130,50 +135,95 @@ class AlertV2Mover(
         }
     }
 
-    private suspend fun searchForExpiredAlerts(): SearchResponse {
-        val now = Instant.now().toEpochMilli()
-        val expiredAlertsQuery = QueryBuilders.rangeQuery(AlertV2.EXPIRATION_TIME_FIELD).lte(now)
-
-        val expiredAlertsSearchQuery = SearchSourceBuilder.searchSource()
-            .query(expiredAlertsQuery)
+    private suspend fun searchForExpiredAlerts(): List<AlertV2> {
+        // first collect all active alerts
+        val allAlertsSearchQuery = SearchSourceBuilder.searchSource()
+            .query(QueryBuilders.matchAllQuery())
+            .size(10000)
             .version(true)
-
         val activeAlertsRequest = SearchRequest(AlertV2Indices.ALERT_V2_INDEX)
-            .source(expiredAlertsSearchQuery)
-        val searchResponse: SearchResponse = client.suspendUntil { search(activeAlertsRequest, it) }
-        return searchResponse
+            .source(allAlertsSearchQuery)
+        val searchAlertsResponse: SearchResponse = client.suspendUntil { search(activeAlertsRequest, it) }
+
+        val allAlertV2s = mutableListOf<AlertV2>()
+        searchAlertsResponse.hits.forEach { hit ->
+            allAlertV2s.add(
+                AlertV2.parse(alertV2ContentParser(hit.sourceRef), hit.id, hit.version)
+            )
+        }
+
+        // now collect all monitorV2s
+        val monitorV2sSearchQuery = SearchSourceBuilder.searchSource()
+            .query(QueryBuilders.existsQuery(MONITOR_V2_TYPE))
+            .size(10000)
+            .version(true)
+        val monitorV2sRequest = SearchRequest(SCHEDULED_JOBS_INDEX)
+            .source(monitorV2sSearchQuery)
+        val searchMonitorV2sResponse: SearchResponse = client.suspendUntil { search(monitorV2sRequest, it) }
+
+        val monitorV2s = mutableMapOf<String, MonitorV2>()
+        searchMonitorV2sResponse.hits.forEach { hit ->
+            monitorV2s.put( // TODO: add monitor v2 sanity check here
+                hit.id, ScheduledJob.parse(scheduledJobContentParser(hit.sourceRef), hit.id, hit.version) as MonitorV2
+            )
+        }
+
+        val now = Instant.now().toEpochMilli()
+
+        // now collect all alerts that are now expired
+        val expiredAlerts = mutableListOf<AlertV2>()
+        for (alertV2 in allAlertV2s) {
+            val monitorV2Id = alertV2.monitorId
+            val triggerV2Id = alertV2.triggerId
+            val triggeredTime = alertV2.triggeredTime.toEpochMilli()
+
+            val monitorV2 = monitorV2s[monitorV2Id]
+
+            // if the monitor ID associated with the alert
+            // no longer exists, then it must have gotten
+            // deleted after this alert was generated, expire
+            // the alert
+            if (monitorV2 == null) {
+                expiredAlerts.add(alertV2)
+                continue
+            }
+
+            var triggerFound = false
+            for (trigger in monitorV2.triggers) {
+                if (trigger.id != triggerV2Id) continue
+
+                // expire durations come in minutes, convert to millis
+                val expireDurationMillis = trigger.expireDuration * 60 * 1000
+
+                if (now - triggeredTime >= expireDurationMillis) {
+                    expiredAlerts.add(alertV2)
+                }
+
+                triggerFound = true
+
+                break
+            }
+
+            // if this alert's trigger was not found,
+            // it's likely that the trigger's ID was
+            // edited somehow, clean this alert up to
+            // retain only alerts generated by triggers
+            // that have a currently existing id
+            if (!triggerFound) {
+                expiredAlerts.add(alertV2)
+            }
+        }
+
+        return expiredAlerts
     }
 
-    private suspend fun copyExpiredAlerts(expiredAlertsSearchResponse: SearchResponse): BulkResponse? {
+    private suspend fun deleteExpiredAlerts(expiredAlerts: List<AlertV2>): BulkResponse? {
         // If no expired alerts are found, simply return
-        if (expiredAlertsSearchResponse.hits.totalHits?.value == 0L) {
+        if (expiredAlerts.isEmpty()) {
             return null
         }
 
-        val indexRequests = expiredAlertsSearchResponse.hits.map { hit ->
-            IndexRequest(AlertV2Indices.ALERT_V2_HISTORY_WRITE_INDEX)
-                .source(
-                    AlertV2.parse(alertV2ContentParser(hit.sourceRef), hit.id, hit.version)
-                        .toXContent(XContentFactory.jsonBuilder(), ToXContent.EMPTY_PARAMS)
-                )
-                .version(hit.version)
-                .versionType(VersionType.EXTERNAL_GTE)
-                .id(hit.id)
-        }
-
-        val copyRequest = BulkRequest().add(indexRequests)
-        val copyResponse: BulkResponse = client.suspendUntil { bulk(copyRequest, it) }
-
-        return copyResponse
-    }
-
-    private suspend fun deleteExpiredAlerts(expiredAlertsSearchResponse: SearchResponse): BulkResponse? {
-        // If no expired alerts are found, simply return
-        if (expiredAlertsSearchResponse.hits.totalHits?.value == 0L) {
-            return null
-        }
-
-        val deleteRequests = expiredAlertsSearchResponse.hits.map {
+        val deleteRequests = expiredAlerts.map {
             DeleteRequest(AlertV2Indices.ALERT_V2_INDEX, it.id)
                 .version(it.version)
                 .versionType(VersionType.EXTERNAL_GTE)
@@ -183,6 +233,26 @@ class AlertV2Mover(
         val deleteResponse: BulkResponse = client.suspendUntil { bulk(deleteRequest, it) }
 
         return deleteResponse
+    }
+
+    private suspend fun copyExpiredAlerts(expiredAlerts: List<AlertV2>): BulkResponse? {
+        // If no expired alerts are found, simply return
+        if (expiredAlerts.isEmpty()) {
+            return null
+        }
+
+        val indexRequests = expiredAlerts.map {
+            IndexRequest(AlertV2Indices.ALERT_V2_HISTORY_WRITE_INDEX)
+                .source(it.toXContent(XContentFactory.jsonBuilder(), ToXContent.EMPTY_PARAMS))
+                .version(it.version)
+                .versionType(VersionType.EXTERNAL_GTE)
+                .id(it.id)
+        }
+
+        val copyRequest = BulkRequest().add(indexRequests)
+        val copyResponse: BulkResponse = client.suspendUntil { bulk(copyRequest, it) }
+
+        return copyResponse
     }
 
     private suspend fun deleteExpiredAlertsThatWereCopied(copyResponse: BulkResponse?): BulkResponse? {
@@ -223,6 +293,14 @@ class AlertV2Mover(
             bytesReference, XContentType.JSON
         )
         XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, xcp.nextToken(), xcp)
+        return xcp
+    }
+
+    private fun scheduledJobContentParser(bytesReference: BytesReference): XContentParser {
+        val xcp = XContentHelper.createParser(
+            xContentRegistry, LoggingDeprecationHandler.INSTANCE,
+            bytesReference, XContentType.JSON
+        )
         return xcp
     }
 

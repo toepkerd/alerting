@@ -369,7 +369,7 @@ internal class AlertingPlugin : PainlessExtension, ActionPlugin, ScriptPlugin, R
         scheduler = JobScheduler(threadPool, runner)
         sweeper = JobSweeper(environment.settings(), client, clusterService, threadPool, xContentRegistry, scheduler, ALERTING_JOB_TYPES)
         destinationMigrationCoordinator = DestinationMigrationCoordinator(client, clusterService, threadPool, scheduledJobIndices)
-        alertV2Mover = AlertV2Mover(environment.settings(), client, threadPool, clusterService)
+        alertV2Mover = AlertV2Mover(environment.settings(), client, threadPool, clusterService, xContentRegistry)
         this.threadPool = threadPool
         this.clusterService = clusterService
 

@@ -424,8 +424,6 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
         executionId: String,
         timeOfCurrentExecution: Instant
     ): List<AlertV2> {
-        val expirationTime = timeOfCurrentExecution.plus(pplSqlTrigger.expireDuration, ChronoUnit.MINUTES)
-
         val alertV2s = mutableListOf<AlertV2>()
         for (queryResult in preparedQueryResults) {
             val alertV2 = AlertV2(
@@ -438,7 +436,6 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
                 query = pplSqlMonitor.query,
                 queryResults = queryResult.toMap(),
                 triggeredTime = timeOfCurrentExecution,
-                expirationTime = expirationTime,
                 severity = pplSqlTrigger.severity,
                 executionId = executionId
             )
@@ -455,8 +452,6 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
         executionId: String,
         timeOfCurrentExecution: Instant
     ): List<AlertV2> {
-        val expirationTime = timeOfCurrentExecution.plus(pplSqlTrigger.expireDuration, ChronoUnit.MILLIS)
-
         val errorMessage = "Failed to run PPL Trigger ${pplSqlTrigger.name} from PPL Monitor ${pplSqlMonitor.name}: " +
             exception.userErrorMessage()
         val obfuscatedErrorMessage = AlertError.obfuscateIPAddresses(errorMessage)
@@ -471,7 +466,6 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
             query = pplSqlMonitor.query,
             queryResults = mapOf(), // TODO: decouple alerts and notifs errors
             triggeredTime = timeOfCurrentExecution,
-            expirationTime = expirationTime,
             errorMessage = obfuscatedErrorMessage,
             severity = Severity.ERROR,
             executionId = executionId

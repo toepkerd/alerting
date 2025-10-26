@@ -90,7 +90,8 @@ class TransportDeleteMonitorV2Action @Inject constructor(
                 actionListener.onFailure(e)
             }
 
-            // we do not expire the alerts associated with the deleted monitor, but instead let its expiration time delete it
+            // scheduled AlertV2Mover will sweep the alerts and find that this monitor no longer exists,
+            // and expire this monitor's alerts accordingly
         }
     }
 
