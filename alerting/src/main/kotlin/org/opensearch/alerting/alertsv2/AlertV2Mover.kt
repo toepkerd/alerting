@@ -39,7 +39,6 @@ import org.opensearch.core.rest.RestStatus
 import org.opensearch.core.xcontent.NamedXContentRegistry
 import org.opensearch.core.xcontent.ToXContent
 import org.opensearch.core.xcontent.XContentParser
-import org.opensearch.core.xcontent.XContentParserUtils
 import org.opensearch.index.VersionType
 import org.opensearch.index.query.QueryBuilders
 import org.opensearch.search.builder.SearchSourceBuilder
@@ -278,20 +277,16 @@ class AlertV2Mover(
     }
 
     private fun alertV2ContentParser(bytesReference: BytesReference): XContentParser {
-        val xcp = XContentHelper.createParser(
+        return XContentHelper.createParser(
             NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE,
             bytesReference, XContentType.JSON
         )
-        XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, xcp.nextToken(), xcp)
-        return xcp
     }
-
     private fun scheduledJobContentParser(bytesReference: BytesReference): XContentParser {
-        val xcp = XContentHelper.createParser(
+        return XContentHelper.createParser(
             xContentRegistry, LoggingDeprecationHandler.INSTANCE,
             bytesReference, XContentType.JSON
         )
-        return xcp
     }
 
     private fun areAlertV2IndicesPresent(): Boolean {
@@ -352,9 +347,6 @@ class AlertV2Mover(
                         NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE,
                         hit.sourceRef, XContentType.JSON
                     )
-
-                    // nextToken() must be called before passing into AlertV2 parser
-                    XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, xcp.nextToken(), xcp)
 
                     IndexRequest(ALERT_V2_HISTORY_WRITE_INDEX)
                         .routing(monitorV2Id)

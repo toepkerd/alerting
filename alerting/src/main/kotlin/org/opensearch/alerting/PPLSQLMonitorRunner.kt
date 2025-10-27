@@ -56,6 +56,7 @@ import java.time.ZoneOffset.UTC
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
+import kotlin.math.min
 
 object PPLSQLMonitorRunner : MonitorV2Runner() {
     private val logger = LogManager.getLogger(javaClass)
@@ -95,6 +96,8 @@ object PPLSQLMonitorRunner : MonitorV2Runner() {
         // use threadpool time for cross node consistency
         val timeOfCurrentExecution = Instant.ofEpochMilli(MonitorRunnerService.monitorCtx.threadPool!!.absoluteTimeInMillis())
 
+        // check for and create the active alerts and alert history indices
+        // so we have indices to write alerts to
         try {
             monitorCtx.alertV2Indices!!.createOrUpdateAlertV2Index()
             monitorCtx.alertV2Indices!!.createOrUpdateInitialAlertV2HistoryIndex()
@@ -163,7 +166,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner() {
 
                 // store the query results for Execute Monitor API response
                 // unlike the query results stored in alerts and notifications, which must be size capped
-                // (because they will be stored in the OpenSearch cluster or sent as notification) and based
+                // (because they will be stored in the OpenSearch cluster or sent as notification) and must be based
                 // on only the query results that met the trigger condition (because alerts should generate
                 // on query results that met trigger condition, not those that didn't), the pplQueryResults
                 // here will be returned as part of the Execute Monitor API response. This will return the original,
@@ -191,13 +194,14 @@ object PPLSQLMonitorRunner : MonitorV2Runner() {
                         monitorCtx.clusterService!!.clusterSettings.get(AlertingSettings.ALERT_V2_PER_RESULT_TRIGGER_MAX_ALERTS)
 
                     // if trigger is on result set mode, this list will have exactly 1 element
-                    // if trigger is on per result mode, this list will have as many elements as the query results had rows
-                    // up to the max number of alerts a per result trigger can generate
+                    // if trigger is on per result mode, this list will have as many elements as the query results had
+                    // trigger condition-meeting rows, up to the max number of alerts a per result trigger can generate
                     val preparedQueryResults = splitUpQueryResults(pplSqlTrigger, queryResponseJson, maxQueryResultsSize, maxAlerts)
 
                     // generate alerts based on trigger mode
                     // if this trigger is on result_set mode, this list contains exactly 1 alert
-                    // if this trigger is on per_result mode, this list has any alerts as there are relevant query results
+                    // if this trigger is on per_result mode, this list has as many alerts as there are
+                    // trigger condition-meeting query results
                     val thisTriggersGeneratedAlerts = generateAlerts(
                         pplSqlTrigger,
                         pplSqlMonitor,
@@ -275,20 +279,20 @@ object PPLSQLMonitorRunner : MonitorV2Runner() {
         // the interval between throttledTimeBound and now is the throttle window
         // i.e. any PPLTrigger whose last trigger time is in this window must be throttled
         val throttleTimeBound = pplTrigger.throttleDuration?.let {
-            timeOfCurrentExecution.minus(pplTrigger.throttleDuration!!, ChronoUnit.MINUTES)
+            timeOfCurrentExecution.minus(pplTrigger.throttleDuration, ChronoUnit.MINUTES)
         }
 
         // the trigger must be throttled if...
         return pplTrigger.throttleDuration != null && // throttling is enabled on the PPLTrigger
             pplTrigger.lastTriggeredTime != null && // and it has triggered before at least once
-            pplTrigger.lastTriggeredTime!!.isAfter(throttleTimeBound!!) // and it's not yet out of the throttle window
+            pplTrigger.lastTriggeredTime!!.isAfter(throttleTimeBound!!) // and it's not yet out of its throttle window
     }
 
     // adds monitor schedule-based time filter
     // query: the raw PPL Monitor query
-    // periodStart: the lower bound of the initially computed query interval based on monitor schedule
+    // lookbackPeriodStart: the lower bound of the query interval based on monitor schedule and look back window
     // periodEnd: the upper bound of the initially computed query interval based on monitor schedule
-    // lookBackWindow: customer's desired query look back window, overrides [periodStart, periodEnd] if not null
+    // timestampField: the timestamp field that will be used to time bound the query results
     private fun addTimeFilter(query: String, lookbackPeriodStart: Instant, periodEnd: Instant, timestampField: String): String {
         // PPL plugin only accepts timestamp strings in this format
         val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT).withZone(UTC)
@@ -368,14 +372,17 @@ object PPLSQLMonitorRunner : MonitorV2Runner() {
         }
 
         // case: per result
-        // prepare to generate an alert for each relevant query result row
+        // prepare to generate an alert for each relevant query result row,
+        // up to the maxAlerts limit
         val individualRows = mutableListOf<JSONObject>()
-        if (pplTrigger.conditionType == ConditionType.NUMBER_OF_RESULTS) { // nested case: number_of_results
-            val numAlertsToGenerate = pplQueryResults.getInt("total")
+        if (pplTrigger.conditionType == ConditionType.NUMBER_OF_RESULTS) {
+            // nested case: number_of_results
+            val numAlertsToGenerate = min(maxAlerts, pplQueryResults.getInt("total"))
             for (i in 0 until numAlertsToGenerate) {
                 addRowToList(individualRows, pplQueryResults, i, maxQueryResultsSize)
             }
-        } else { // nested case: custom
+        } else {
+            // nested case: custom
             val evalResultVarName = findEvalResultVar(pplTrigger.customCondition!!)
             val evalResultVarIdx = findEvalResultVarIdxInSchema(pplQueryResults, evalResultVarName)
             val dataRowList = pplQueryResults.getJSONArray("datarows")
@@ -385,16 +392,15 @@ object PPLSQLMonitorRunner : MonitorV2Runner() {
                 if (evalResult) {
                     addRowToList(individualRows, pplQueryResults, i, maxQueryResultsSize)
                 }
+                if (individualRows.size >= maxAlerts) {
+                    break
+                }
             }
         }
 
         logger.debug("individualRows: $individualRows")
 
-        // there may be many query result rows, and generating an alert for each of them could lead to cluster issues,
-        // so limit the number of per_result alerts that are generated
-        val cappedIndividualRows = individualRows.take(maxAlerts)
-
-        return cappedIndividualRows
+        return individualRows
     }
 
     private fun addRowToList(
@@ -464,7 +470,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner() {
             triggerId = pplSqlTrigger.id,
             triggerName = pplSqlTrigger.name,
             query = pplSqlMonitor.query,
-            queryResults = mapOf(), // TODO: decouple alerts and notifs errors
+            queryResults = mapOf(),
             triggeredTime = timeOfCurrentExecution,
             errorMessage = obfuscatedErrorMessage,
             severity = Severity.ERROR,

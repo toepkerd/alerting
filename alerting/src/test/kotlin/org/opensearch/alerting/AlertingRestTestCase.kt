@@ -869,7 +869,7 @@ abstract class AlertingRestTestCase : ODFERestTestCase() {
 
         val searchResponse = SearchResponse.fromXContent(createParser(jsonXContent, httpResponse.entity.content))
         return searchResponse.hits.hits.map {
-            val xcp = createParser(jsonXContent, it.sourceRef).also { it.nextToken() }
+            val xcp = createParser(jsonXContent, it.sourceRef)
             AlertV2.parse(xcp, it.id, it.version)
         }
     }

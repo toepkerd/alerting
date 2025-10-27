@@ -369,10 +369,8 @@ object MonitorRunnerService : JobRunner, CoroutineScope, AbstractLifecycleCompon
                 logger.error("Failed to move active alerts for monitor [$jobId].", e)
             }
             try {
-                logger.info("in post delete")
                 monitorCtx.moveAlertsRetryPolicy!!.retry(logger) {
                     if (monitorCtx.alertV2Indices!!.isAlertV2Initialized()) {
-                        logger.info("moving alerts in post delete")
                         moveAlertV2s(jobId, null, monitorCtx)
                     }
                 }

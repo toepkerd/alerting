@@ -37,8 +37,6 @@ import org.opensearch.commons.authuser.User.BACKEND_ROLES_FIELD
 import org.opensearch.core.action.ActionListener
 import org.opensearch.core.common.io.stream.NamedWriteableRegistry
 import org.opensearch.core.xcontent.NamedXContentRegistry
-import org.opensearch.core.xcontent.XContentParser
-import org.opensearch.core.xcontent.XContentParserUtils
 import org.opensearch.index.query.Operator
 import org.opensearch.index.query.QueryBuilders
 import org.opensearch.search.builder.SearchSourceBuilder
@@ -178,7 +176,6 @@ class TransportGetAlertsV2Action @Inject constructor(
                             hit.sourceRef,
                             XContentType.JSON
                         )
-                        XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, xcp.nextToken(), xcp)
                         val alertV2 = AlertV2.parse(xcp, hit.id, hit.version)
                         alertV2
                     }

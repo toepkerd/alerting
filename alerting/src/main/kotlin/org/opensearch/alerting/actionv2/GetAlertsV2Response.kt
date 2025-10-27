@@ -17,8 +17,8 @@ import java.util.Collections
 class GetAlertsV2Response : BaseResponse {
     val alertV2s: List<AlertV2>
 
-    // totalAlertV2s is not the same as the size of alerts because there can be 30 alerts from the request, but
-    // the request only asked for 5 alerts, so totalAlertV2s will be 30, but alerts will only contain 5 alerts
+    // totalAlertV2s is not the same as the size of alertV2s because there can be 30 alerts from the request, but
+    // the request only asked for 5 alerts, so totalAlertV2s will be 30, but alertV2s will only contain 5 alerts
     val totalAlertV2s: Int?
 
     constructor(
