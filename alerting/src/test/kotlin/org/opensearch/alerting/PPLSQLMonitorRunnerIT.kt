@@ -260,7 +260,7 @@ class PPLSQLMonitorRunnerIT : AlertingRestTestCase() {
         assert(!alertsGenerated) { "Alerts should not have been generated but they were" }
     }
 
-    fun `test generated alert gets expired`() {
+    fun `test execute api generated alert gets expired`() {
         createIndex(TEST_INDEX_NAME, Settings.EMPTY, TEST_INDEX_MAPPINGS)
         indexDocFromSomeTimeAgo(1, MINUTES, "abc", 5)
 
@@ -298,6 +298,54 @@ class PPLSQLMonitorRunnerIT : AlertingRestTestCase() {
         }, 2, TimeUnit.MINUTES)
 
         val getAlertsResponsePostExpire = getAlertV2s()
+        val alertsGeneratedPostExpire = numAlerts(getAlertsResponsePostExpire) > 0
+        assert(!alertsGeneratedPostExpire)
+    }
+
+    fun `test scheduled job generated alert gets expired`() {
+        createIndex(TEST_INDEX_NAME, Settings.EMPTY, TEST_INDEX_MAPPINGS)
+        indexDocFromSomeTimeAgo(1, MINUTES, "abc", 5)
+
+        // the monitor should generate 1 alert, then not generate
+        // any alerts for the rest of the test
+        createRandomPPLMonitor(
+            randomPPLMonitor(
+                enabled = true,
+                schedule = IntervalSchedule(interval = 1, unit = MINUTES),
+                triggers = listOf(
+                    randomPPLTrigger(
+                        throttleDuration = 100L,
+                        expireDuration = 1L,
+                        mode = TriggerMode.RESULT_SET,
+                        conditionType = ConditionType.NUMBER_OF_RESULTS,
+                        numResultsCondition = NumResultsCondition.GREATER_THAN,
+                        numResultsValue = 0L,
+                        customCondition = null
+                    )
+                ),
+                query = "source = $TEST_INDEX_NAME | head 10"
+            )
+        )
+
+        // sleep briefly so scheduled job can generate the alert
+        OpenSearchTestCase.waitUntil({
+            return@waitUntil false
+        }, 2, TimeUnit.MINUTES)
+
+        val getAlertsResponsePreExpire = getAlertV2s()
+        val alertsGeneratedPreExpire = numAlerts(getAlertsResponsePreExpire) > 0
+
+        assert(alertsGeneratedPreExpire) { "Alerts should have been generated but they weren't" }
+
+        // sleep briefly so alert mover can expire the alert
+        OpenSearchTestCase.waitUntil({
+            return@waitUntil false
+        }, 2, TimeUnit.MINUTES)
+
+//        client().updateSettings(AlertingSettings.COMMENTS_HISTORY_ROLLOVER_PERIOD.key, "17h")
+
+        val getAlertsResponsePostExpire = getAlertV2s()
+        logger.info("num alerts: ${numAlerts(getAlertsResponsePostExpire)}")
         val alertsGeneratedPostExpire = numAlerts(getAlertsResponsePostExpire) > 0
         assert(!alertsGeneratedPostExpire)
     }
