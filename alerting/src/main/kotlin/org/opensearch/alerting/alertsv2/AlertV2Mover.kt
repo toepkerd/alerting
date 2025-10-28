@@ -161,13 +161,20 @@ class AlertV2Mover(
             .source(monitorV2sSearchQuery)
         val searchMonitorV2sResponse: SearchResponse = client.suspendUntil { search(monitorV2sRequest, it) }
 
+        searchMonitorV2sResponse.hits.forEach { hit ->
+            logger.info("alert v2 mover search monitors response hit: ${hit.id}")
+        }
+
         val triggerToExpireDuration = mutableMapOf<String, Long>()
         searchMonitorV2sResponse.hits.forEach { hit ->
             val monitorV2 = ScheduledJob.parse(scheduledJobContentParser(hit.sourceRef), hit.id, hit.version) as MonitorV2
+            logger.info("monitor ${hit.id}: $monitorV2")
             monitorV2.triggers.forEach { trigger ->
                 triggerToExpireDuration.put(trigger.id, trigger.expireDuration)
             }
         }
+
+        logger.info("trigger to expiration: $triggerToExpireDuration")
 
         val now = Instant.now().toEpochMilli()
 
@@ -178,6 +185,8 @@ class AlertV2Mover(
             val triggeredTime = alertV2.triggeredTime.toEpochMilli()
 
             val expireDuration = triggerToExpireDuration[triggerV2Id]
+
+            logger.info("expire duration retrieved: $expireDuration")
 
             // if the ID of the trigger that generated this alert can't
             // be found from the search monitor response, it means one of two things:
@@ -202,6 +211,8 @@ class AlertV2Mover(
                 expiredAlerts.add(alertV2)
             }
         }
+
+        logger.info("expired alerts: $expiredAlerts")
 
         return expiredAlerts
     }
@@ -332,6 +343,8 @@ class AlertV2Mover(
             val activeAlertsRequest = SearchRequest(ALERT_V2_INDEX)
                 .source(alertsSearchQuery)
             val searchAlertsResponse: SearchResponse = client.suspendUntil { search(activeAlertsRequest, it) }
+
+            logger.info("alerts found: ${searchAlertsResponse.hits.totalHits?.value}")
 
             // If no alerts are found, simply return
             if (searchAlertsResponse.hits.totalHits?.value == 0L) return
