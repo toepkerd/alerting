@@ -205,10 +205,16 @@ class AlertV2Mover(
             }
 
             val expireDurationMillis = expireDuration * 60 * 1000
+            logger.info("now: $now")
+            logger.info("expire duration millis: $expireDurationMillis")
+            logger.info("triggeredTime: $triggeredTime")
+            logger.info("difference: ${now - triggeredTime}")
             if (now - triggeredTime >= expireDurationMillis) {
                 expiredAlerts.add(alertV2)
             }
         }
+
+        logger.info("expiredAlerts: $expiredAlerts")
 
         return expiredAlerts
     }
@@ -219,6 +225,8 @@ class AlertV2Mover(
             return null
         }
 
+        logger.info("deleting expired alerts: $expiredAlerts")
+
         val deleteRequests = expiredAlerts.map {
             DeleteRequest(ALERT_V2_INDEX, it.id)
                 .version(it.version)
@@ -228,6 +236,9 @@ class AlertV2Mover(
         val deleteRequest = BulkRequest().add(deleteRequests)
         val deleteResponse: BulkResponse = client.suspendUntil { bulk(deleteRequest, it) }
 
+        logger.info("delete response rest status: ${deleteResponse.status()}")
+        logger.info("delete response failure msg: ${deleteResponse.buildFailureMessage()}")
+
         return deleteResponse
     }
 
@@ -236,6 +247,8 @@ class AlertV2Mover(
         if (expiredAlerts.isEmpty()) {
             return null
         }
+
+        logger.info("copying expired alerts: $expiredAlerts")
 
         val indexRequests = expiredAlerts.map {
             IndexRequest(ALERT_V2_HISTORY_WRITE_INDEX)
@@ -248,6 +261,9 @@ class AlertV2Mover(
         val copyRequest = BulkRequest().add(indexRequests)
         val copyResponse: BulkResponse = client.suspendUntil { bulk(copyRequest, it) }
 
+        logger.info("copy response rest status: ${copyResponse.status()}")
+        logger.info("copy response failure msg: ${copyResponse.buildFailureMessage()}")
+
         return copyResponse
     }
 
@@ -257,6 +273,8 @@ class AlertV2Mover(
             return null
         }
 
+        logger.info("deleting copied alerts")
+
         val deleteRequests = copyResponse.items.filterNot { it.isFailed }.map {
             DeleteRequest(ALERT_V2_INDEX, it.id)
                 .version(it.version)
@@ -265,10 +283,14 @@ class AlertV2Mover(
         val deleteRequest = BulkRequest().add(deleteRequests)
         val deleteResponse: BulkResponse = client.suspendUntil { bulk(deleteRequest, it) }
 
+        logger.info("post copy delete response rest status: ${deleteResponse.status()}")
+        logger.info("post copy delete response failure msg: ${deleteResponse.buildFailureMessage()}")
+
         return deleteResponse
     }
 
     private fun checkForFailures(bulkResponse: BulkResponse?) {
+        logger.info("checking for failures")
         bulkResponse?.let {
             if (bulkResponse.hasFailures()) {
                 val retryCause = bulkResponse.items.filter { it.isFailed }
@@ -289,6 +311,7 @@ class AlertV2Mover(
             bytesReference, XContentType.JSON
         )
     }
+
     private fun scheduledJobContentParser(bytesReference: BytesReference): XContentParser {
         return XContentHelper.createParser(
             xContentRegistry, LoggingDeprecationHandler.INSTANCE,
