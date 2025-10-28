@@ -161,10 +161,6 @@ class AlertV2Mover(
             .source(monitorV2sSearchQuery)
         val searchMonitorV2sResponse: SearchResponse = client.suspendUntil { search(monitorV2sRequest, it) }
 
-        searchMonitorV2sResponse.hits.forEach { hit ->
-            logger.info("alert v2 mover search monitors response hit: ${hit.id}")
-        }
-
         val triggerToExpireDuration = mutableMapOf<String, Long>()
         searchMonitorV2sResponse.hits.forEach { hit ->
             val monitorV2 = ScheduledJob.parse(scheduledJobContentParser(hit.sourceRef), hit.id, hit.version) as MonitorV2
@@ -173,8 +169,6 @@ class AlertV2Mover(
                 triggerToExpireDuration.put(trigger.id, trigger.expireDuration)
             }
         }
-
-        logger.info("trigger to expiration: $triggerToExpireDuration")
 
         val now = Instant.now().toEpochMilli()
 
@@ -211,8 +205,6 @@ class AlertV2Mover(
                 expiredAlerts.add(alertV2)
             }
         }
-
-        logger.info("expired alerts: $expiredAlerts")
 
         return expiredAlerts
     }
@@ -313,6 +305,8 @@ class AlertV2Mover(
         suspend fun moveAlertV2s(monitorV2Id: String, monitorV2: MonitorV2?, monitorCtx: MonitorRunnerExecutionContext) {
             val client = monitorCtx.client!!
 
+            logger.info("monitor whose alerts to move: $monitorV2Id")
+
             // first collect all alerts that came from this updated or deleted monitor
             val boolQuery = QueryBuilders.boolQuery()
                 .filter(QueryBuilders.termQuery(AlertV2.MONITOR_V2_ID_FIELD, monitorV2Id))
@@ -333,6 +327,7 @@ class AlertV2Mover(
              meaning this logic will pick up those updated triggers and correctly move/delete the alerts
             */
             if (monitorV2 != null) {
+                logger.info("filtering out triggers")
                 boolQuery.mustNot(QueryBuilders.termsQuery(AlertV2.TRIGGER_V2_ID_FIELD, monitorV2.triggers.map { it.id }))
             }
 
@@ -344,7 +339,9 @@ class AlertV2Mover(
                 .source(alertsSearchQuery)
             val searchAlertsResponse: SearchResponse = client.suspendUntil { search(activeAlertsRequest, it) }
 
-            logger.info("alerts found: ${searchAlertsResponse.hits.totalHits?.value}")
+            searchAlertsResponse.hits.forEach { hit ->
+                logger.info("alert v2 mover search alerts response hit: ${hit.id}")
+            }
 
             // If no alerts are found, simply return
             if (searchAlertsResponse.hits.totalHits?.value == 0L) return

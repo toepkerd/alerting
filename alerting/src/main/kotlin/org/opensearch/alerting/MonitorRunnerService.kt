@@ -337,7 +337,6 @@ object MonitorRunnerService : JobRunner, CoroutineScope, AbstractLifecycleCompon
                     logger.info("in post index")
                     monitorCtx.moveAlertsRetryPolicy!!.retry(logger) {
                         if (monitorCtx.alertV2Indices!!.isAlertV2Initialized()) {
-                            logger.info("moving alerts in post index")
                             moveAlertV2s(job.id, job, monitorCtx)
                         }
                     }
