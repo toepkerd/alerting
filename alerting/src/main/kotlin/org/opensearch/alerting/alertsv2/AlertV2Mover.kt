@@ -157,6 +157,8 @@ class AlertV2Mover(
             )
         }
 
+        logger.info("all active alerts: $allAlertV2s")
+
         // now collect all triggers and their expire durations
         val monitorV2sSearchQuery = SearchSourceBuilder.searchSource()
             .query(QueryBuilders.existsQuery(MONITOR_V2_TYPE))
@@ -165,7 +167,7 @@ class AlertV2Mover(
         val monitorV2sRequest = SearchRequest(SCHEDULED_JOBS_INDEX)
             .source(monitorV2sSearchQuery)
             .indicesOptions(
-                IndicesOptions.LENIENT_EXPAND_OPEN
+                IndicesOptions.LENIENT_EXPAND_OPEN_HIDDEN
             )
         val searchMonitorV2sResponse: SearchResponse = client.suspendUntil { search(monitorV2sRequest, it) }
 
