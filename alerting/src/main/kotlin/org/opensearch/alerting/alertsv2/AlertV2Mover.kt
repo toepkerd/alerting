@@ -231,8 +231,8 @@ class AlertV2Mover(
 
         val deleteRequests = expiredAlerts.map {
             DeleteRequest(ALERT_V2_INDEX, it.id)
-                .version(it.version)
-                .versionType(VersionType.EXTERNAL_GTE)
+//                .version(it.version)
+//                .versionType(VersionType.EXTERNAL_GTE)
         }
 
         val deleteRequest = BulkRequest().add(deleteRequests)
