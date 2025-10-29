@@ -15,7 +15,6 @@ import org.opensearch.action.delete.DeleteRequest
 import org.opensearch.action.index.IndexRequest
 import org.opensearch.action.search.SearchRequest
 import org.opensearch.action.search.SearchResponse
-import org.opensearch.action.support.IndicesOptions
 import org.opensearch.alerting.MonitorRunnerExecutionContext
 import org.opensearch.alerting.alertsv2.AlertV2Indices.Companion.ALERT_V2_HISTORY_WRITE_INDEX
 import org.opensearch.alerting.alertsv2.AlertV2Indices.Companion.ALERT_V2_INDEX
@@ -166,9 +165,6 @@ class AlertV2Mover(
             .version(true)
         val monitorV2sRequest = SearchRequest(SCHEDULED_JOBS_INDEX)
             .source(monitorV2sSearchQuery)
-            .indicesOptions(
-                IndicesOptions.LENIENT_EXPAND_OPEN_HIDDEN
-            )
         val searchMonitorV2sResponse: SearchResponse = client.suspendUntil { search(monitorV2sRequest, it) }
 
         val triggerToExpireDuration = mutableMapOf<String, Long>()
