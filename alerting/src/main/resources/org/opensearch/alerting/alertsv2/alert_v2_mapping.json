@@ -1,7 +1,7 @@
 {
   "dynamic": "strict",
   "_routing": {
-    "required": false
+    "required": true
   },
   "_meta" : {
     "schema_version": 1
