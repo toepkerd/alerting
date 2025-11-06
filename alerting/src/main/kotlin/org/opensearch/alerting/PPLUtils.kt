@@ -9,8 +9,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.opensearch.alerting.core.ppl.PPLPluginInterface
 import org.opensearch.alerting.opensearchapi.suspendUntil
+import org.opensearch.cluster.node.DiscoveryNode
 import org.opensearch.sql.plugin.transport.TransportPPLQueryRequest
-import org.opensearch.transport.client.node.NodeClient
+import org.opensearch.transport.TransportService
 
 object PPLUtils {
     /**
@@ -77,7 +78,11 @@ object PPLUtils {
      * @note The response format follows the PPL plugin's Execute API response structure with
      *       "schema", "datarows", "total", and "size" fields.
      */
-    suspend fun executePplQuery(query: String, client: NodeClient): JSONObject {
+    suspend fun executePplQuery(
+        query: String,
+        localNode: DiscoveryNode,
+        transportService: TransportService
+    ): JSONObject {
         // call PPL plugin to execute query
         val transportPplQueryRequest = TransportPPLQueryRequest(
             query,
@@ -87,7 +92,8 @@ object PPLUtils {
 
         val transportPplQueryResponse = PPLPluginInterface.suspendUntil {
             this.executeQuery(
-                client,
+                transportService,
+                localNode,
                 transportPplQueryRequest,
                 it
             )
@@ -208,7 +214,8 @@ object PPLUtils {
     fun getIndicesFromPplQuery(pplQuery: String): List<String> {
         // captures comma-separated concrete indices, index patterns, and index aliases
         // TODO: these are in-house PPL query parsers, find a PPL plugin dependency that does this for us
-        val indicesRegex = """(?i)source(?:\s*)=(?:\s*)([-\w.*'+]+(?:\*)?(?:\s*,\s*[-\w.*'+]+\*?)*)\s*\|*""".toRegex()
+        val indicesRegex = """(?i)source(?:\s*)=(?:\s*)((?:`[^`]+`|[-\w.*'+]+(?:\*)?)(?:\s*,\s*(?:`[^`]+`|[-\w.*'+]+\*?))*)\s*\|*"""
+            .toRegex()
 
         // use find() instead of findAll() because a PPL query only ever has one source statement
         // the only capture group specified in the regex captures the comma separated string of indices/index patterns
@@ -218,7 +225,17 @@ object PPLUtils {
                     "after validating the query through SQL/PPL plugin."
             )
 
-        return indices
+        // remove any backticks that might have been read in
+        val unBackTickedIndices = mutableListOf<String>()
+        indices.forEach {
+            if (it.startsWith("`") && it.endsWith("`")) {
+                unBackTickedIndices.add(it.substring(1, it.length - 1))
+            } else {
+                unBackTickedIndices.add(it)
+            }
+        }
+
+        return unBackTickedIndices.toList()
     }
 
     /**

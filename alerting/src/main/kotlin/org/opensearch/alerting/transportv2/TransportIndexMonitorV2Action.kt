@@ -82,13 +82,12 @@ import org.opensearch.search.builder.SearchSourceBuilder
 import org.opensearch.tasks.Task
 import org.opensearch.transport.TransportService
 import org.opensearch.transport.client.Client
-import org.opensearch.transport.client.node.NodeClient
 
 private val log = LogManager.getLogger(TransportIndexMonitorV2Action::class.java)
 private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO)
 
 class TransportIndexMonitorV2Action @Inject constructor(
-    transportService: TransportService,
+    val transportService: TransportService,
     val client: Client,
     actionFilters: ActionFilters,
     val scheduledJobIndices: ScheduledJobIndices,
@@ -239,16 +238,19 @@ class TransportIndexMonitorV2Action @Inject constructor(
         }
     }
 
-    private suspend fun validatePplSqlQuery(pplSqlMonitor: PPLSQLMonitor, validationListener: ActionListener<Unit>): Boolean {
+    private suspend fun validatePplSqlQuery(
+        pplSqlMonitor: PPLSQLMonitor,
+        validationListener: ActionListener<Unit>
+    ): Boolean {
         // first attempt to run the monitor query and all possible
         // extensions of it (from custom conditions)
         try {
-            val nodeClient = client as NodeClient
+//            val nodeClient = client as NodeClient
 
             // first run the base query as is.
             // if there are any PPL syntax or index not found or other errors,
             // this will throw an exception
-            executePplQuery(pplSqlMonitor.query, nodeClient)
+            executePplQuery(pplSqlMonitor.query, clusterService.state().nodes.localNode, transportService)
 
             // now scan all the triggers with custom conditions, and ensure each query constructed
             // from the base query + custom condition is valid
@@ -261,7 +263,11 @@ class TransportIndexMonitorV2Action @Inject constructor(
 
                 val queryWithCustomCondition = appendCustomCondition(pplSqlMonitor.query, pplTrigger.customCondition!!)
 
-                val executePplQueryResponse = executePplQuery(queryWithCustomCondition, nodeClient)
+                val executePplQueryResponse = executePplQuery(
+                    queryWithCustomCondition,
+                    clusterService.state().nodes.localNode,
+                    transportService
+                )
 
                 val evalResultVarIdx = findEvalResultVarIdxInSchema(executePplQueryResponse, evalResultVar)
 
@@ -455,12 +461,13 @@ class TransportIndexMonitorV2Action @Inject constructor(
         val pplQuery = pplSqlMonitor.query
         val timestampField = pplSqlMonitor.timestampField
 
-        val indices = getIndicesFromPplQuery(pplQuery)
-        val getMappingsRequest = GetMappingsRequest().indices(*indices.toTypedArray())
-        val getMappingsResponse = client.suspendUntil { admin().indices().getMappings(getMappingsRequest, it) }
-
-        val metadataMap = getMappingsResponse.mappings
         try {
+            val indices = getIndicesFromPplQuery(pplQuery)
+            val getMappingsRequest = GetMappingsRequest().indices(*indices.toTypedArray())
+            val getMappingsResponse = client.suspendUntil { admin().indices().getMappings(getMappingsRequest, it) }
+
+            val metadataMap = getMappingsResponse.mappings
+
             for (index in metadataMap.keys) {
                 val metadata = metadataMap[index]!!.sourceAsMap["properties"] as Map<String, Any>
                 if (!metadata.keys.contains(timestampField)) {
@@ -473,11 +480,14 @@ class TransportIndexMonitorV2Action @Inject constructor(
                 }
                 val typeInfo = metadata[timestampField] as Map<String, String>
                 val type = typeInfo["type"]
-                if (type == null || !type.contains("date")) {
+                val dateType = "date"
+                val dateNanosType = "date_nanos"
+                if (type != dateType && type != dateNanosType) {
                     validationListener.onFailure(
                         AlertingException.wrap(
                             IllegalArgumentException(
-                                "Timestamp field: $timestampField is present in index $index but is of type $type instead of type date"
+                                "Timestamp field: $timestampField is present in index $index " +
+                                    "but is type $type instead of $dateType or $dateNanosType"
                             )
                         )
                     )
