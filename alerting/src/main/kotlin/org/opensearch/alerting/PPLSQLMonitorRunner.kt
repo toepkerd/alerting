@@ -51,6 +51,7 @@ import org.opensearch.commons.alerting.model.userErrorMessage
 import org.opensearch.core.common.Strings
 import org.opensearch.core.rest.RestStatus
 import org.opensearch.core.xcontent.ToXContent
+import org.opensearch.index.VersionType
 import org.opensearch.transport.TransportService
 import org.opensearch.transport.client.node.NodeClient
 import java.time.Duration
@@ -131,6 +132,10 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
             .clusterSettings
             .get(AlertingSettings.ALERT_V2_MONITOR_EXECUTION_MAX_DURATION)
 
+        // for storing any exception that may or may not happen
+        // while executing monitor
+        var exception: Exception? = null
+
         // run each trigger
         try {
             withTimeout(monitorExecutionDuration.millis) {
@@ -162,12 +167,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
                 )
             }
 
-            return PPLSQLMonitorRunResult(
-                pplSqlMonitor.name,
-                e,
-                triggerResults,
-                pplSqlQueryResults
-            )
+            exception = e
         }
 
         // for throttle checking purposes, reindex the PPL Monitor into the alerting-config index
@@ -184,7 +184,7 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
 
         return PPLSQLMonitorRunResult(
             pplSqlMonitor.name,
-            null,
+            exception,
             triggerResults,
             pplSqlQueryResults
         )
@@ -618,6 +618,9 @@ object PPLSQLMonitorRunner : MonitorV2Runner {
                 )
             )
             .routing(pplSqlMonitor.id)
+            .version(pplSqlMonitor.version)
+            .versionType(VersionType.EXTERNAL_GTE)
+
         val indexResponse = client.suspendUntil { index(indexRequest, it) }
 
         logger.debug("PPLSQLMonitor update with last execution times index response: ${indexResponse.result}")
