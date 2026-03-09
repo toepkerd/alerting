@@ -63,7 +63,8 @@ class TransportExecuteMonitorAction @Inject constructor(
     private val sdkClient: SdkClient
 ) : HandledTransportAction<ExecuteMonitorRequest, ExecuteMonitorResponse> (
     ExecuteMonitorAction.NAME, transportService, actionFilters, ::ExecuteMonitorRequest
-) {
+),
+    SecureTransportAction {
     @Volatile private var indexTimeout = AlertingSettings.INDEX_TIMEOUT.get(settings)
 
     @Volatile override var filterByEnabled = AlertingSettings.FILTER_BY_BACKEND_ROLES.get(settings)
@@ -100,7 +101,14 @@ class TransportExecuteMonitorAction @Inject constructor(
                             "Executing monitor from API - id: ${monitor.id}, type: ${monitor.monitorType}, " +
                                 "periodStart: $periodStart, periodEnd: $periodEnd, dryrun: ${execMonitorRequest.dryrun}"
                         )
-                        val monitorRunResult = runner.runJob(monitor, periodStart, periodEnd, execMonitorRequest.dryrun, transportService)
+                        val monitorRunResult = runner.runJob(
+                            monitor,
+                            periodStart,
+                            periodEnd,
+                            execMonitorRequest.dryrun,
+                            execMonitorRequest.manual,
+                            transportService
+                        )
                         withContext(Dispatchers.IO) {
                             actionListener.onResponse(ExecuteMonitorResponse(monitorRunResult))
                         }
@@ -196,6 +204,14 @@ class TransportExecuteMonitorAction @Inject constructor(
                             )
                         )
                     )
+                    return@use
+                }
+
+                if (execMonitorRequest.manual && !checkUserPermissionsWithResource(
+                        user, monitor.user, actionListener,
+                        "monitor", monitor.id
+                    )
+                ) {
                     return@use
                 }
 
