@@ -470,7 +470,7 @@ class TransportIndexWorkflowAction @Inject constructor(
                     user,
                     currentWorkflow.user,
                     actionListener,
-                    "workfklow",
+                    "workflow",
                     request.workflowId
                 )
             ) {
