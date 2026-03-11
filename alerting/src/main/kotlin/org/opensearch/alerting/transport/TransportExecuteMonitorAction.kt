@@ -141,15 +141,7 @@ class TransportExecuteMonitorAction @Inject constructor(
                             )
                             return@whenComplete
                         }
-                        if (!getResponse.isSourceEmpty) {
-                            XContentHelper.createParser(
-                                xContentRegistry, LoggingDeprecationHandler.INSTANCE,
-                                getResponse.sourceAsBytesRef, XContentType.JSON
-                            ).use { xcp ->
-                                val monitor = ScheduledJob.parse(xcp, getResponse.id, getResponse.version) as Monitor
-                                executeMonitor(monitor)
-                            }
-                        } else {
+                        if (getResponse.isSourceEmpty) {
                             actionListener.onFailure(
                                 AlertingException.wrap(
                                     OpenSearchStatusException(
@@ -158,6 +150,23 @@ class TransportExecuteMonitorAction @Inject constructor(
                                     )
                                 )
                             )
+                            return@whenComplete
+                        }
+                        XContentHelper.createParser(
+                            xContentRegistry, LoggingDeprecationHandler.INSTANCE,
+                            getResponse.sourceAsBytesRef, XContentType.JSON
+                        ).use { xcp ->
+                            val monitor = ScheduledJob.parse(xcp, getResponse.id, getResponse.version) as Monitor
+
+                            if (execMonitorRequest.manual && !checkUserPermissionsWithResource(
+                                    user, monitor.user, actionListener,
+                                    "monitor", execMonitorRequest.monitorId
+                                )
+                            ) {
+                                return@whenComplete
+                            }
+
+                            executeMonitor(monitor)
                         }
                     } catch (e: Exception) {
                         log.error("Failed to get monitor ${execMonitorRequest.monitorId} for execution", e)
