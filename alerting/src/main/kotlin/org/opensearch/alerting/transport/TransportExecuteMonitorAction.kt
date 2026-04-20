@@ -22,6 +22,7 @@ import org.opensearch.alerting.action.ExecuteMonitorRequest
 import org.opensearch.alerting.action.ExecuteMonitorResponse
 import org.opensearch.alerting.settings.AlertingSettings
 import org.opensearch.alerting.util.DocLevelMonitorQueries
+import org.opensearch.alerting.util.isUnsupportedMultiTenantMonitorType
 import org.opensearch.alerting.util.use
 import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.inject.Inject
@@ -63,6 +64,14 @@ class TransportExecuteMonitorAction @Inject constructor(
     ExecuteMonitorAction.NAME, transportService, actionFilters, ::ExecuteMonitorRequest
 ) {
     @Volatile private var indexTimeout = AlertingSettings.INDEX_TIMEOUT.get(settings)
+
+    @Volatile override var filterByEnabled = AlertingSettings.FILTER_BY_BACKEND_ROLES.get(settings)
+
+    private val multiTenancyEnabled = AlertingSettings.MULTI_TENANCY_ENABLED.get(settings)
+
+    init {
+        listenFilterBySettingChange(clusterService)
+    }
 
     override fun doExecute(task: Task, execMonitorRequest: ExecuteMonitorRequest, actionListener: ActionListener<ExecuteMonitorResponse>) {
 
@@ -127,15 +136,7 @@ class TransportExecuteMonitorAction @Inject constructor(
                             )
                             return@whenComplete
                         }
-                        if (!getResponse.isSourceEmpty) {
-                            XContentHelper.createParser(
-                                xContentRegistry, LoggingDeprecationHandler.INSTANCE,
-                                getResponse.sourceAsBytesRef, XContentType.JSON
-                            ).use { xcp ->
-                                val monitor = ScheduledJob.parse(xcp, getResponse.id, getResponse.version) as Monitor
-                                executeMonitor(monitor)
-                            }
-                        } else {
+                        if (getResponse.isSourceEmpty) {
                             actionListener.onFailure(
                                 AlertingException.wrap(
                                     OpenSearchStatusException(
@@ -144,6 +145,35 @@ class TransportExecuteMonitorAction @Inject constructor(
                                     )
                                 )
                             )
+                            return@whenComplete
+                        }
+                        XContentHelper.createParser(
+                            xContentRegistry, LoggingDeprecationHandler.INSTANCE,
+                            getResponse.sourceAsBytesRef, XContentType.JSON
+                        ).use { xcp ->
+                            val monitor = ScheduledJob.parse(xcp, getResponse.id, getResponse.version) as Monitor
+
+                            if (multiTenancyEnabled && monitor.isUnsupportedMultiTenantMonitorType()) {
+                                actionListener.onFailure(
+                                    AlertingException.wrap(
+                                        OpenSearchStatusException(
+                                            "${monitor.monitorType} monitors are not allowed when multi-tenancy is enabled.",
+                                            RestStatus.METHOD_NOT_ALLOWED
+                                        )
+                                    )
+                                )
+                                return@whenComplete
+                            }
+
+                            if (execMonitorRequest.manual && !checkUserPermissionsWithResource(
+                                    user, monitor.user, actionListener,
+                                    "monitor", execMonitorRequest.monitorId
+                                )
+                            ) {
+                                return@whenComplete
+                            }
+
+                            executeMonitor(monitor)
                         }
                     } catch (e: Exception) {
                         log.error("Failed to get monitor ${execMonitorRequest.monitorId} for execution", e)
@@ -154,6 +184,18 @@ class TransportExecuteMonitorAction @Inject constructor(
                 val monitor = when (user?.name.isNullOrEmpty()) {
                     true -> execMonitorRequest.monitor as Monitor
                     false -> (execMonitorRequest.monitor as Monitor).copy(user = user)
+                }
+
+                if (multiTenancyEnabled && monitor.isUnsupportedMultiTenantMonitorType()) {
+                    actionListener.onFailure(
+                        AlertingException.wrap(
+                            OpenSearchStatusException(
+                                "${monitor.monitorType} monitors are not allowed when multi-tenancy is enabled.",
+                                RestStatus.METHOD_NOT_ALLOWED
+                            )
+                        )
+                    )
+                    return@use
                 }
 
                 if (
