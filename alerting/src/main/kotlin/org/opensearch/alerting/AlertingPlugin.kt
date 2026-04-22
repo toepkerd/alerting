@@ -463,12 +463,22 @@ internal class AlertingPlugin : PainlessExtension, ActionPlugin, ScriptPlugin, R
             AlertingSettings.MAX_COMMENTS_PER_ALERT,
             AlertingSettings.MAX_COMMENTS_PER_NOTIFICATION,
             AlertingSettings.NOTIFICATION_CONTEXT_RESULTS_ALLOWED_ROLES,
+            AlertingSettings.PPL_MONITOR_EXECUTION_MAX_DURATION,
+            AlertingSettings.PPL_MAX_QUERY_LENGTH,
+            AlertingSettings.PPL_QUERY_RESULTS_MAX_DATAROWS,
+            AlertingSettings.PPL_QUERY_RESULTS_MAX_SIZE,
+            AlertingSettings.NOTIFICATION_SUBJECT_SOURCE_MAX_LENGTH,
+            AlertingSettings.NOTIFICATION_MESSAGE_SOURCE_MAX_LENGTH,
             AlertingSettings.MULTI_TENANCY_ENABLED,
             AlertingSettings.REMOTE_METADATA_STORE_TYPE,
             AlertingSettings.REMOTE_METADATA_ENDPOINT,
             AlertingSettings.REMOTE_METADATA_REGION,
             AlertingSettings.REMOTE_METADATA_SERVICE_NAME,
-            AlertingSettings.MULTI_TENANT_TRIGGER_EVAL_ENABLED
+            AlertingSettings.MULTI_TENANT_TRIGGER_EVAL_ENABLED,
+            AlertingSettings.EXTERNAL_SCHEDULER_ENABLED,
+            AlertingSettings.EXTERNAL_SCHEDULER_ACCOUNT_ID,
+            AlertingSettings.EXTERNAL_SCHEDULER_QUEUE_ARN,
+            AlertingSettings.EXTERNAL_SCHEDULER_ROLE_ARN
         )
     }
 
