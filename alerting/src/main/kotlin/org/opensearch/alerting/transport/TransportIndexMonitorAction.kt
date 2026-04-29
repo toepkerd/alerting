@@ -127,6 +127,7 @@ class TransportIndexMonitorAction @Inject constructor(
     @Volatile private var externalSchedulerAccountId = AlertingSettings.EXTERNAL_SCHEDULER_ACCOUNT_ID.get(settings)
     @Volatile private var jobQueueName = AlertingSettings.JOB_QUEUE_NAME.get(settings)
     @Volatile private var externalSchedulerRoleArn = AlertingSettings.EXTERNAL_SCHEDULER_ROLE_ARN.get(settings)
+    @Volatile private var externalSchedulerExecutionRoleArn = AlertingSettings.EXTERNAL_SCHEDULER_EXECUTION_ROLE_ARN.get(settings)
 
     private val multiTenancyEnabled = AlertingSettings.MULTI_TENANCY_ENABLED.get(settings)
 
@@ -156,6 +157,9 @@ class TransportIndexMonitorAction @Inject constructor(
         }
         clusterService.clusterSettings.addSettingsUpdateConsumer(AlertingSettings.EXTERNAL_SCHEDULER_ROLE_ARN) {
             externalSchedulerRoleArn = it
+        }
+        clusterService.clusterSettings.addSettingsUpdateConsumer(AlertingSettings.EXTERNAL_SCHEDULER_EXECUTION_ROLE_ARN) {
+            externalSchedulerExecutionRoleArn = it
         }
         listenFilterBySettingChange(clusterService)
     }
@@ -911,6 +915,7 @@ class TransportIndexMonitorAction @Inject constructor(
             settingsAccountId = externalSchedulerAccountId,
             settingsQueueName = jobQueueName,
             settingsRoleArn = externalSchedulerRoleArn,
+            settingsExecutionRoleArn = externalSchedulerExecutionRoleArn,
             threadContextAccountIdOverride = client.threadPool().threadContext
                 .getTransient<String>(ExternalSchedulerService.SCHEDULER_ACCOUNT_ID_KEY)
         )
