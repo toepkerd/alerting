@@ -19,6 +19,7 @@ import org.opensearch.alerting.opensearchapi.convertToMap
 import org.opensearch.alerting.opensearchapi.suspendUntil
 import org.opensearch.alerting.settings.AlertingSettings
 import org.opensearch.alerting.util.AggregationQueryRewriter
+import org.opensearch.alerting.util.BucketSelectorQueryBuilder
 import org.opensearch.alerting.util.CrossClusterMonitorUtils
 import org.opensearch.alerting.util.IndexUtils
 import org.opensearch.alerting.util.addUserBackendRolesFilter
@@ -35,6 +36,7 @@ import org.opensearch.common.settings.Settings
 import org.opensearch.common.unit.TimeValue
 import org.opensearch.common.xcontent.LoggingDeprecationHandler
 import org.opensearch.common.xcontent.XContentType
+import org.opensearch.commons.alerting.model.BucketLevelTrigger
 import org.opensearch.commons.alerting.model.ClusterMetricsInput
 import org.opensearch.commons.alerting.model.InputRunResults
 import org.opensearch.commons.alerting.model.Monitor
@@ -81,7 +83,8 @@ class InputService(
         periodStart: Instant,
         periodEnd: Instant,
         prevResult: InputRunResults? = null,
-        workflowRunContext: WorkflowRunContext? = null
+        workflowRunContext: WorkflowRunContext? = null,
+        useStandardBucketSelector: Boolean = false
     ): InputRunResults {
         return try {
             val results = mutableListOf<Map<String, Any>>()
@@ -102,7 +105,8 @@ class InputService(
                             periodEnd = periodEnd,
                             prevResult = prevResult,
                             matchingDocIdsPerIndex = matchingDocIdsPerIndex,
-                            returnSampleDocs = false
+                            returnSampleDocs = false,
+                            useStandardBucketSelector = useStandardBucketSelector
                         )
                         val searchResponse: SearchResponse = client.suspendUntil { client.search(searchRequest, it) }
                         aggTriggerAfterKey += AggregationQueryRewriter.getAfterKeysFromSearchResponse(
@@ -313,7 +317,8 @@ class InputService(
         periodEnd: Instant,
         prevResult: InputRunResults?,
         matchingDocIdsPerIndex: Map<String, List<String>>?,
-        returnSampleDocs: Boolean = false
+        returnSampleDocs: Boolean = false,
+        useStandardBucketSelector: Boolean = false
     ): SearchRequest {
         // TODO: Figure out a way to use SearchTemplateRequest without bringing in the entire TransportClient
         val searchParams = mapOf(
@@ -323,11 +328,22 @@ class InputService(
 
         // Deep copying query before passing it to rewriteQuery since otherwise, the monitor.input is modified directly
         // which causes a strange bug where the rewritten query persists on the Monitor across executions
+        val copiedQuery = deepCopyQuery(searchInput.query)
+
+        // When using standard bucket_selector, inject it as a sub-agg instead of BucketSelectorExt.
+        if (useStandardBucketSelector) {
+            val bucketTriggers = monitor.triggers.filterIsInstance<BucketLevelTrigger>()
+            if (bucketTriggers.isNotEmpty()) {
+                BucketSelectorQueryBuilder.injectBucketSelector(copiedQuery, bucketTriggers)
+            }
+        }
+
         val rewrittenQuery = AggregationQueryRewriter.rewriteQuery(
-            deepCopyQuery(searchInput.query),
+            copiedQuery,
             prevResult,
             monitor.triggers,
-            returnSampleDocs
+            returnSampleDocs,
+            skipBucketSelectorInjection = useStandardBucketSelector
         )
 
         // Rewrite query to consider the doc ids per given index

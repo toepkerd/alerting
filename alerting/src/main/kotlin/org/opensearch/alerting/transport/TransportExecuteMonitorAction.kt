@@ -22,6 +22,7 @@ import org.opensearch.alerting.action.ExecuteMonitorRequest
 import org.opensearch.alerting.action.ExecuteMonitorResponse
 import org.opensearch.alerting.settings.AlertingSettings
 import org.opensearch.alerting.util.DocLevelMonitorQueries
+import org.opensearch.alerting.util.isUnsupportedMultiTenantMonitorType
 import org.opensearch.alerting.util.use
 import org.opensearch.cluster.service.ClusterService
 import org.opensearch.common.inject.Inject
@@ -66,6 +67,8 @@ class TransportExecuteMonitorAction @Inject constructor(
     @Volatile private var indexTimeout = AlertingSettings.INDEX_TIMEOUT.get(settings)
 
     @Volatile override var filterByEnabled = AlertingSettings.FILTER_BY_BACKEND_ROLES.get(settings)
+
+    private val multiTenancyEnabled = AlertingSettings.MULTI_TENANCY_ENABLED.get(settings)
 
     init {
         listenFilterBySettingChange(clusterService)
@@ -116,7 +119,7 @@ class TransportExecuteMonitorAction @Inject constructor(
                 }
             }
 
-            if (execMonitorRequest.monitorId != null) {
+            if (execMonitorRequest.monitorId != null && execMonitorRequest.monitor == null) {
                 val tenantId = client.threadPool().threadContext.getHeader(AlertingPlugin.TENANT_ID_HEADER)
                 val getRequest = GetDataObjectRequest.builder()
                     .index(ScheduledJob.SCHEDULED_JOBS_INDEX)
@@ -158,6 +161,18 @@ class TransportExecuteMonitorAction @Inject constructor(
                         ).use { xcp ->
                             val monitor = ScheduledJob.parse(xcp, getResponse.id, getResponse.version) as Monitor
 
+                            if (multiTenancyEnabled && monitor.isUnsupportedMultiTenantMonitorType()) {
+                                actionListener.onFailure(
+                                    AlertingException.wrap(
+                                        OpenSearchStatusException(
+                                            "${monitor.monitorType} monitors are not allowed when multi-tenancy is enabled.",
+                                            RestStatus.METHOD_NOT_ALLOWED
+                                        )
+                                    )
+                                )
+                                return@whenComplete
+                            }
+
                             if (execMonitorRequest.manual && !checkUserPermissionsWithResource(
                                     user, monitor.user, actionListener,
                                     "monitor", execMonitorRequest.monitorId
@@ -177,6 +192,26 @@ class TransportExecuteMonitorAction @Inject constructor(
                 val monitor = when (user?.name.isNullOrEmpty()) {
                     true -> execMonitorRequest.monitor as Monitor
                     false -> (execMonitorRequest.monitor as Monitor).copy(user = user)
+                }
+
+                if (multiTenancyEnabled && monitor.isUnsupportedMultiTenantMonitorType()) {
+                    actionListener.onFailure(
+                        AlertingException.wrap(
+                            OpenSearchStatusException(
+                                "${monitor.monitorType} monitors are not allowed when multi-tenancy is enabled.",
+                                RestStatus.METHOD_NOT_ALLOWED
+                            )
+                        )
+                    )
+                    return@use
+                }
+
+                if (execMonitorRequest.manual && !checkUserPermissionsWithResource(
+                        user, monitor.user, actionListener,
+                        "monitor", monitor.id
+                    )
+                ) {
+                    return@use
                 }
 
                 if (

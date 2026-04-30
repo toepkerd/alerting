@@ -397,5 +397,69 @@ class AlertingSettings {
             false,
             Setting.Property.NodeScope, Setting.Property.Dynamic
         )
+
+        /**
+         * Enables managing monitor schedules on an external EventBridge Scheduler instead of
+         * the in-cluster job scheduler. When disabled (default), monitor create/update/delete
+         * flows skip the external schedule hooks entirely.
+         */
+        val EXTERNAL_SCHEDULER_ENABLED = Setting.boolSetting(
+            "plugins.alerting.external_scheduler.enabled",
+            false,
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        /**
+         * Default AWS account that owns the EventBridge schedules. May be overridden per-request
+         * by a transient ThreadContext value under [ExternalSchedulerService.SCHEDULER_ACCOUNT_ID_KEY].
+         */
+        val EXTERNAL_SCHEDULER_ACCOUNT_ID = Setting.simpleString(
+            "plugins.alerting.external_scheduler.account_id",
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        /** IAM role ARN that EventBridge assumes to send messages to the target SQS queue. */
+        val EXTERNAL_SCHEDULER_ROLE_ARN = Setting.simpleString(
+            "plugins.alerting.external_scheduler.role_arn",
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        /** IAM role ARN that EventBridge Scheduler assumes at fire time (Target.roleArn). Required when external scheduler is enabled. */
+        val EXTERNAL_SCHEDULER_EXECUTION_ROLE_ARN = Setting.simpleString(
+            "plugins.alerting.external_scheduler.execution_role_arn",
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        /** AWS account ID that hosts the job queues available for polling. */
+        val JOB_QUEUE_ACCOUNT_ID = Setting.simpleString(
+            "plugins.alerting.external_scheduler.job_queue_account_id",
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        /** Provider type used to resolve job queue account IDs (e.g. "plugin_setting"). */
+        val JOB_QUEUE_ACCOUNT_PROVIDER_TYPE = Setting.simpleString(
+            "plugins.alerting.external_scheduler.job_queue_account_provider_type",
+            "plugin_setting",
+            Setting.Property.NodeScope, Setting.Property.Final
+        )
+
+        /** Name of the SQS queue to poll for monitor execution messages. */
+        val JOB_QUEUE_NAME = Setting.simpleString(
+            "plugins.alerting.external_scheduler.job_queue_name",
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        /** Key name in monitor metadata whose value is used as the SQS MessageGroupId for fair queuing. */
+        val JOB_QUEUE_MESSAGE_GROUP_KEY_NAME = Setting.simpleString(
+            "plugins.alerting.external_scheduler.job_queue_message_group_key_name",
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
+
+        /** Mappings from Monitor target type to opensearch service name, used in MonitorJobPoller
+         * to populate thread context with required Monitor target information */
+        val TARGET_TYPE_TO_SERVICE_NAME = Setting.groupSetting(
+            "plugins.alerting.monitor.target_type_to_service_name.",
+            Setting.Property.NodeScope, Setting.Property.Dynamic
+        )
     }
 }
