@@ -14,13 +14,6 @@ import org.opensearch.transport.client.node.NodeClient
 
 object PPLUtils {
 
-//    // TODO: these are in-house PPL query parsers, find a PPL plugin dependency that does this for us
-//    /* Regular Expressions */
-//    // captures the name of the result variable in a PPL monitor's custom condition
-//    // e.g. custom condition: `eval apple = avg_latency > 100`
-//    // captures: "apple"
-//    private val evalResultVarRegex = """^(?!.*\|)\s*(?i:eval)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=""".toRegex()
-
     private val customConditionValidationRegex = """^\s*where\s+.+""".toRegex()
 
     const val PPL_RESULTS_SIZE_EXCEEDED_MESSAGE = "The PPL Query results were too large and thus excluded."
