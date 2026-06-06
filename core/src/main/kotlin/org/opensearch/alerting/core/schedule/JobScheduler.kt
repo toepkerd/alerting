@@ -113,10 +113,16 @@ class JobScheduler(private val threadPool: ThreadPool, private val jobRunner: Jo
     fun deschedule(id: String): Boolean {
         val scheduledJobInfo = scheduledJobIdToInfo[id]
         if (scheduledJobInfo == null) {
-            logger.info("JobId $id does not exist.")
+            logger.info(
+                "RACE_DEBUG [JobScheduler.deschedule]" +
+                    " jobId=$id NOT FOUND in scheduledJobIdToInfo" +
+                    " (already removed or never scheduled here)" +
+                    " thread=${Thread.currentThread().name}"
+            )
             return true
         } else {
             logger.info("Descheduling jobId : $id")
+            val wasDescheduled = scheduledJobInfo.descheduled
             scheduledJobInfo.descheduled = true
             scheduledJobInfo.actualPreviousExecutionTime = null
             scheduledJobInfo.expectedNextExecutionTime = null
@@ -128,9 +134,18 @@ class JobScheduler(private val threadPool: ThreadPool, private val jobRunner: Jo
             }
 
             if (result) {
-                // If we have successfully descheduled the job, remove from the info map.
-                scheduledJobIdToInfo.remove(scheduledJobInfo.scheduledJobId, scheduledJobInfo)
+                scheduledJobIdToInfo.remove(
+                    scheduledJobInfo.scheduledJobId, scheduledJobInfo
+                )
             }
+            logger.info(
+                "RACE_DEBUG [JobScheduler.deschedule]" +
+                    " jobId=$id wasDescheduled=$wasDescheduled" +
+                    " cancelResult=$result" +
+                    " futureWasNull=${scheduledFuture == null}" +
+                    " removedFromMap=$result" +
+                    " thread=${Thread.currentThread().name}"
+            )
             return result
         }
     }
@@ -164,8 +179,20 @@ class JobScheduler(private val threadPool: ThreadPool, private val jobRunner: Jo
         val runnable = Runnable {
             // Check again if the scheduled job is marked descheduled.
             if (scheduledJobInfo.descheduled) {
+                logger.info(
+                    "RACE_DEBUG [JobScheduler.runnable]" +
+                        " jobId=${scheduleJob.id}" +
+                        " SKIPPED - descheduled=true" +
+                        " thread=${Thread.currentThread().name}"
+                )
                 return@Runnable // skip running job if job is marked descheduled.
             }
+
+            logger.info(
+                "RACE_DEBUG [JobScheduler.runnable] FIRING" +
+                    " jobId=${scheduleJob.id}" +
+                    " thread=${Thread.currentThread().name}"
+            )
 
             // Order of operations inside here matter, we specifically call getPeriodEndingAt before reschedule because
             // reschedule will update expectedNextExecutionTime to the next one which would throw off the startTime/endTime
@@ -180,6 +207,12 @@ class JobScheduler(private val threadPool: ThreadPool, private val jobRunner: Jo
         // Check descheduled flag as close as possible before we actually schedule a job.
         // This way we will can minimize race conditions.
         if (scheduledJobInfo.descheduled) {
+            logger.info(
+                "RACE_DEBUG [JobScheduler.reschedule]" +
+                    " jobId=${scheduleJob.id}" +
+                    " NOT scheduling - descheduled=true" +
+                    " thread=${Thread.currentThread().name}"
+            )
             // Do not reschedule if schedule has been marked descheduled.
             return false
         }

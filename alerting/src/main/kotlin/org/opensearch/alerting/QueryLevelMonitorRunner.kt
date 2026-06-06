@@ -133,6 +133,13 @@ object QueryLevelMonitorRunner : MonitorRunner() {
 
         // Don't save alerts if this is a test monitor
         if (!dryrun && monitor.id != Monitor.NO_ID) {
+            logger.info(
+                "RACE_DEBUG [QueryLevelMonitorRunner]" +
+                    " SAVING ${updatedAlerts.size} alerts" +
+                    " monitorId=${monitor.id}" +
+                    " states=${updatedAlerts.map { it.state }}" +
+                    " thread=${Thread.currentThread().name}"
+            )
             monitorCtx.retryPolicy?.let {
                 monitorCtx.alertService!!.saveAlerts(
                     monitor.dataSources,
@@ -141,6 +148,11 @@ object QueryLevelMonitorRunner : MonitorRunner() {
                     routingId = monitor.id
                 )
             }
+            logger.info(
+                "RACE_DEBUG [QueryLevelMonitorRunner]" +
+                    " SAVED alerts monitorId=${monitor.id}" +
+                    " thread=${Thread.currentThread().name}"
+            )
         }
         return monitorResult.copy(triggerResults = triggerResults)
     }
