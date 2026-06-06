@@ -322,7 +322,17 @@ object MonitorRunnerService : JobRunner, CoroutineScope, AbstractLifecycleCompon
     }
 
     override fun postDelete(jobId: String) {
+        logger.info(
+            "RACE_DEBUG [MonitorRunnerService.postDelete]" +
+                " CALLED jobId=$jobId" +
+                " thread=${Thread.currentThread().name}"
+        )
         launch {
+            logger.info(
+                "RACE_DEBUG [MonitorRunnerService.postDelete]" +
+                    " coroutine STARTED jobId=$jobId" +
+                    " thread=${Thread.currentThread().name}"
+            )
             try {
                 monitorCtx.moveAlertsRetryPolicy!!.retry(logger) {
                     moveAlerts(monitorCtx.client!!, jobId, null, monitorCtx)
@@ -339,6 +349,11 @@ object MonitorRunnerService : JobRunner, CoroutineScope, AbstractLifecycleCompon
             } catch (e: Exception) {
                 logger.error("Failed to move active alerts for monitor [$jobId].", e)
             }
+            logger.info(
+                "RACE_DEBUG [MonitorRunnerService.postDelete]" +
+                    " COMPLETED jobId=$jobId" +
+                    " thread=${Thread.currentThread().name}"
+            )
         }
     }
 
@@ -381,10 +396,12 @@ object MonitorRunnerService : JobRunner, CoroutineScope, AbstractLifecycleCompon
                         monitorLock = monitorCtx.client!!.suspendUntil<Client, LockModel?> {
                             monitorCtx.lockService!!.acquireLock(job, it)
                         } ?: return@launch
-                        logger.debug("lock ${monitorLock.lockId} acquired")
-                        logger.debug(
-                            "PERF_DEBUG: executing ${job.monitorType} ${job.id} on node " +
-                                monitorCtx.clusterService!!.state().nodes().localNode.id
+                        logger.info(
+                            "RACE_DEBUG [MonitorRunnerService.runJob]" +
+                                " STARTED monitorId=${job.id}" +
+                                " lockId=${monitorLock.lockId}" +
+                                " node=${monitorCtx.clusterService!!.localNode().id}" +
+                                " thread=${Thread.currentThread().name}"
                         )
                         val executeMonitorRequest = ExecuteMonitorRequest(
                             false,
@@ -400,11 +417,28 @@ object MonitorRunnerService : JobRunner, CoroutineScope, AbstractLifecycleCompon
                                 it
                             )
                         }
+                        logger.info(
+                            "RACE_DEBUG [MonitorRunnerService.runJob]" +
+                                " COMPLETED monitorId=${job.id}" +
+                                " thread=${Thread.currentThread().name}"
+                        )
                     } catch (e: Exception) {
-                        logger.error("Monitor run failed for monitor with id ${job.id}", e)
+                        logger.error(
+                            "RACE_DEBUG [MonitorRunnerService.runJob]" +
+                                " FAILED monitorId=${job.id}" +
+                                " error=${e.message}" +
+                                " thread=${Thread.currentThread().name}",
+                            e
+                        )
                     } finally {
-                        monitorCtx.client!!.suspendUntil<Client, Boolean> { monitorCtx.lockService!!.release(monitorLock, it) }
-                        logger.debug("lock ${monitorLock?.lockId} released")
+                        monitorCtx.client!!.suspendUntil<Client, Boolean> {
+                            monitorCtx.lockService!!.release(monitorLock, it)
+                        }
+                        logger.info(
+                            "RACE_DEBUG [MonitorRunnerService.runJob]" +
+                                " LOCK RELEASED monitorId=${job.id}" +
+                                " thread=${Thread.currentThread().name}"
+                        )
                     }
                 }
             }

@@ -193,11 +193,51 @@ class JobSweeper(
             return
         }
 
-        if (isOwningNode(shardId, delete.id())) {
-            if (scheduler.scheduledJobs().contains(delete.id())) {
+        val localNodeId = clusterService.localNode().id
+        val isOwning = isOwningNode(shardId, delete.id())
+        val isScheduledLocally = scheduler.scheduledJobs()
+            .contains(delete.id())
+        val shardRouting = clusterService.state().routingTable
+            .shardRoutingTable(shardId)
+            .filter { it.currentNodeId() == localNodeId }
+            .firstOrNull()
+        val shardRole = when {
+            shardRouting == null -> "NONE"
+            shardRouting.primary() -> "PRIMARY"
+            else -> "REPLICA"
+        }
+        logger.info(
+            "RACE_DEBUG [JobSweeper.postDelete] jobId=${delete.id()}" +
+                " shardId=$shardId localNode=$localNodeId" +
+                " shardRole=$shardRole" +
+                " isOwningNode=$isOwning" +
+                " isScheduledLocally=$isScheduledLocally" +
+                " resultVersion=${result.version}" +
+                " thread=${Thread.currentThread().name}"
+        )
+
+        if (isOwning) {
+            if (isScheduledLocally) {
+                logger.info(
+                    "RACE_DEBUG [JobSweeper.postDelete]" +
+                        " DESCHEDULING jobId=${delete.id()}" +
+                        " on node=$localNodeId"
+                )
                 sweep(shardId, delete.id(), result.version, null)
+            } else {
+                logger.info(
+                    "RACE_DEBUG [JobSweeper.postDelete]" +
+                        " jobId=${delete.id()} isOwning=true" +
+                        " but NOT in scheduledJobs - skipping sweep"
+                )
             }
             scheduler.postDelete(delete.id())
+        } else {
+            logger.info(
+                "RACE_DEBUG [JobSweeper.postDelete] SKIPPED" +
+                    " jobId=${delete.id()} - not owning node." +
+                    " localNode=$localNodeId"
+            )
         }
     }
 

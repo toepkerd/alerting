@@ -55,6 +55,13 @@ class AlertMover {
          * 4. Schedule a retry if there were any failures
          */
         suspend fun moveAlerts(client: Client, monitorId: String, monitor: Monitor?) {
+            val isPostDelete = monitor == null
+            log.info(
+                "RACE_DEBUG [AlertMover.moveAlerts] START" +
+                    " monitorId=$monitorId" +
+                    " isPostDelete=$isPostDelete" +
+                    " thread=${Thread.currentThread().name}"
+            )
             var alertIndex = monitor?.dataSources?.alertsIndex ?: ALERT_INDEX
             var alertHistoryIndex = monitor?.dataSources?.alertsHistoryIndex ?: ALERT_HISTORY_WRITE_INDEX
 
@@ -75,7 +82,23 @@ class AlertMover {
             val response: SearchResponse = client.suspendUntil { search(activeAlertsRequest, it) }
 
             // If no alerts are found, simply return
-            if (response.hits.totalHits?.value == 0L) return
+            if (response.hits.totalHits?.value == 0L) {
+                log.info(
+                    "RACE_DEBUG [AlertMover.moveAlerts]" +
+                        " FOUND 0 ALERTS - returning early" +
+                        " monitorId=$monitorId" +
+                        " isPostDelete=$isPostDelete" +
+                        " alertIndex=$alertIndex"
+                )
+                return
+            }
+            log.info(
+                "RACE_DEBUG [AlertMover.moveAlerts]" +
+                    " FOUND ${response.hits.totalHits?.value} alerts" +
+                    " monitorId=$monitorId" +
+                    " isPostDelete=$isPostDelete" +
+                    " - moving to DELETED in $alertHistoryIndex"
+            )
             val indexRequests = response.hits.map { hit ->
                 IndexRequest(alertHistoryIndex)
                     .routing(monitorId)

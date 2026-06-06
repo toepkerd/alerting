@@ -67,10 +67,30 @@ object DeleteMonitorService :
      * @param refreshPolicy
      */
     suspend fun deleteMonitor(monitor: Monitor, refreshPolicy: RefreshPolicy): DeleteMonitorResponse {
+        log.info(
+            "RACE_DEBUG [DeleteMonitorService.deleteMonitor]" +
+                " START monitorId=${monitor.id}" +
+                " refreshPolicy=$refreshPolicy" +
+                " thread=${Thread.currentThread().name}"
+        )
         val deleteResponse = deleteMonitor(monitor.id, refreshPolicy)
+        log.info(
+            "RACE_DEBUG [DeleteMonitorService.deleteMonitor]" +
+                " DOC DELETED monitorId=${monitor.id}" +
+                " version=${deleteResponse.version}" +
+                " (IndexingOperationListener should fire now)"
+        )
         deleteDocLevelMonitorQueriesAndIndices(monitor)
         deleteMetadata(monitor)
+        log.info(
+            "RACE_DEBUG [DeleteMonitorService.deleteMonitor]" +
+                " DELETING LOCK monitorId=${monitor.id}"
+        )
         deleteLock(monitor)
+        log.info(
+            "RACE_DEBUG [DeleteMonitorService.deleteMonitor]" +
+                " COMPLETE monitorId=${monitor.id}"
+        )
         return DeleteMonitorResponse(deleteResponse.id, deleteResponse.version)
     }
 
