@@ -41,7 +41,7 @@ dependencies {
     implementation 'commons-validator:commons-validator:1.7'
     implementation 'org.json:json:20240303'
 
-    api fileTree(dir: sqlJarDirectory, include: ["opensearch-sql-thin-${opensearch_build}.jar", "ppl-${opensearch_build}.jar", "protocol-${opensearch_build}.jar", "core-${opensearch_build}.jar"])
+    api fileTree(dir: sqlJarDirectory, include: ["opensearch-sql-thin-${opensearch_build}.jar", "ppl-${opensearch_build}.jar", "protocol-${opensearch_build}.jar", "core-${opensearch_build}.jar", "common-${opensearch_build}.jar", "antlr4-runtime-*.jar", "guava-*.jar"])
 
     zipArchive group: 'org.opensearch.plugin', name:'opensearch-sql-plugin', version: "${opensearch_build}"
 

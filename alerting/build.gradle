@@ -248,6 +248,7 @@ task integTest(type: RestIntegTestTask) {
 }
 tasks.named("check").configure { dependsOn(integTest) }
 Zip bundle = (Zip) project.getTasks().getByName("bundlePlugin");
+bundle.exclude('**/antlr4-runtime*')
 bundle.rename('annotations-2\\.(.+)\\.jar', 'aws-sdk-annotations-2.$1.jar')
 integTest.dependsOn(bundle)
 integTest.getClusters().forEach{c -> c.plugin(project.getObjects().fileProperty().value(bundle.getArchiveFile()))}

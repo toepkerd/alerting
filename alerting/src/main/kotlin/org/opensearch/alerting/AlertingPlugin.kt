@@ -8,6 +8,7 @@ package org.opensearch.alerting
 import org.opensearch.action.ActionRequest
 import org.opensearch.alerting.action.ExecuteMonitorAction
 import org.opensearch.alerting.action.ExecuteWorkflowAction
+import org.opensearch.alerting.action.ExtractPPLIndicesAction
 import org.opensearch.alerting.action.GetDestinationsAction
 import org.opensearch.alerting.action.GetEmailAccountAction
 import org.opensearch.alerting.action.GetEmailGroupAction
@@ -35,6 +36,7 @@ import org.opensearch.alerting.resthandler.RestDeleteMonitorAction
 import org.opensearch.alerting.resthandler.RestDeleteWorkflowAction
 import org.opensearch.alerting.resthandler.RestExecuteMonitorAction
 import org.opensearch.alerting.resthandler.RestExecuteWorkflowAction
+import org.opensearch.alerting.resthandler.RestExtractPPLIndicesAction
 import org.opensearch.alerting.resthandler.RestGetAlertsAction
 import org.opensearch.alerting.resthandler.RestGetDestinationsAction
 import org.opensearch.alerting.resthandler.RestGetEmailAccountAction
@@ -75,6 +77,7 @@ import org.opensearch.alerting.transport.TransportDeleteWorkflowAction
 import org.opensearch.alerting.transport.TransportDocLevelMonitorFanOutAction
 import org.opensearch.alerting.transport.TransportExecuteMonitorAction
 import org.opensearch.alerting.transport.TransportExecuteWorkflowAction
+import org.opensearch.alerting.transport.TransportExtractPPLIndicesAction
 import org.opensearch.alerting.transport.TransportGetAlertsAction
 import org.opensearch.alerting.transport.TransportGetDestinationsAction
 import org.opensearch.alerting.transport.TransportGetEmailAccountAction
@@ -157,7 +160,6 @@ import org.opensearch.threadpool.ThreadPool
 import org.opensearch.transport.client.Client
 import org.opensearch.watcher.ResourceWatcherService
 import java.util.function.Supplier
-
 /**
  * Entry point of the OpenDistro for Elasticsearch alerting plugin
  * This class initializes the [RestGetMonitorAction], [RestDeleteMonitorAction], [RestIndexMonitorAction] rest handlers.
@@ -236,6 +238,7 @@ internal class AlertingPlugin : PainlessExtension, ActionPlugin, ScriptPlugin, R
             RestGetWorkflowAction(),
             RestDeleteWorkflowAction(),
             RestGetRemoteIndexesAction(),
+            RestExtractPPLIndicesAction(),
             RestIndexAlertingCommentAction(),
             RestSearchAlertingCommentAction(),
             RestDeleteAlertingCommentAction(),
@@ -270,6 +273,7 @@ internal class AlertingPlugin : PainlessExtension, ActionPlugin, ScriptPlugin, R
             ActionPlugin.ActionHandler(AlertingActions.DELETE_COMMENT_ACTION_TYPE, TransportDeleteAlertingCommentAction::class.java),
             ActionPlugin.ActionHandler(ExecuteWorkflowAction.INSTANCE, TransportExecuteWorkflowAction::class.java),
             ActionPlugin.ActionHandler(GetRemoteIndexesAction.INSTANCE, TransportGetRemoteIndexesAction::class.java),
+            ActionPlugin.ActionHandler(ExtractPPLIndicesAction.INSTANCE, TransportExtractPPLIndicesAction::class.java),
             ActionPlugin.ActionHandler(DocLevelMonitorFanOutAction.INSTANCE, TransportDocLevelMonitorFanOutAction::class.java)
         )
     }
